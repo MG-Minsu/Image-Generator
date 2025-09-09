@@ -69,4 +69,24 @@ def setup_dreamcanvas_app():
                     st.write(paragraph)
 
                     # Build prompt for this paragraph
-                    full_prompt = create_visual_prompt(paragraph, chosen_style, mood_slider,_
+                    full_prompt = create_visual_prompt(paragraph, chosen_style, mood_slider, art_styles, color_palette)
+
+                    # Run async image generator
+                    images = asyncio.run(generate_story_images(full_prompt, num_images=image_count))
+
+                    for img_idx, img_path in enumerate(images, start=1):
+                        st.image(img_path, caption=f"Paragraph {para_idx} - Variation {img_idx}")
+                        if isinstance(img_path, str) and img_path.endswith(".png"):
+                            with open(img_path, "rb") as f:
+                                st.download_button(
+                                    label=f"💾 Download Paragraph {para_idx} - Variation {img_idx}",
+                                    data=f,
+                                    file_name=f"story_para{para_idx}_var{img_idx}.png",
+                                    mime="image/png"
+                                )
+
+            else:
+                st.warning("Please write a story first!")
+
+if __name__ == "__main__":
+    setup_dreamcanvas_app()
