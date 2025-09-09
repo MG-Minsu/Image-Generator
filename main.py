@@ -15,7 +15,7 @@ def create_visual_prompt(story_text, style_choice, mood_setting, art_styles, col
 async def generate_story_images(prompt_text, num_images=1, size="1024x1024"):
     """Generate multiple images from OpenAI Image API"""
     result = client.images.generate(
-        model="dall-e-3",   # fallback to "dall-e-3" if needed
+        model="dall-e-2",   # fallback to "dall-e-3" if needed
         prompt=prompt_text,
         n=num_images,
         size=size
