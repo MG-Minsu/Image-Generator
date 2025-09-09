@@ -13,27 +13,28 @@ def create_visual_prompt(story_text, style_choice, mood_setting, art_styles, col
 
 # --- Image Generator using OpenAI ---
 async def generate_story_images(prompt_text, num_images=1, size="1024x1024"):
-    """Generate multiple images from OpenAI Image API"""
+    """Generate images using DALL·E"""
     result = client.images.generate(
-        model="dall-e-2",   # fallback to "dall-e-3" if needed
+        model="dall-e-3",  # or "dall-e-2"
         prompt=prompt_text,
-        n=num_images,
-        size=size
+        size=size,
+        quality="standard",   # or "hd"
+        n=1 if "dall-e-3" else num_images
     )
 
-    # Decode base64 images or return URLs
     image_paths = []
     for i, img_data in enumerate(result.data, start=1):
         if hasattr(img_data, "b64_json") and img_data.b64_json:
             img_bytes = base64.b64decode(img_data.b64_json)
-            filename = f"generated_image_{i}.png"
+            filename = f"dalle_image_{i}.png"
             with open(filename, "wb") as f:
                 f.write(img_bytes)
             image_paths.append(filename)
         elif hasattr(img_data, "url") and img_data.url:
             image_paths.append(img_data.url)
 
-    return image_paths
+   
+
 
 # --- Main App ---
 def setup_dreamcanvas_app():
