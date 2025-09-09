@@ -55,7 +55,7 @@ def setup_dreamcanvas_app():
             "Dark & Mysterious", "Calm & Peaceful", "Bright & Energetic", "Epic & Dramatic"
         ])
         color_palette = st.multiselect("Colors:", ["Blues", "Reds", "Purples", "Golds"], default=["Blues"])
-        image_count = st.slider("Number of Images per Paragraph:", 1, 3, 1)
+        image_count = st.multiselect("Number of Images per Paragraph: 9elect 1 for now)", ["Blues", "Reds", "Purples", "Golds"], default=["Blues"])
 
         if st.button("✨ Create Magic"):
             if user_story.strip():
