@@ -12,14 +12,14 @@ def create_visual_prompt(story_text, style_choice, mood_setting, art_styles, col
     return f"{story_text}, {art_styles[style_choice]}, {mood_setting}, {color_desc}, masterpiece quality"
 
 # --- Image Generator using OpenAI ---
-async def generate_story_images(prompt_text, num_images=1, size="1024x1024"):
+async def generate_story_images(prompt_text, num_images=1, size="1024x1024", model="dall-e-3"):
     """Generate images using DALL·E"""
     result = client.images.generate(
-        model="dall-e-3",  # or "dall-e-2"
+        model=model,  
         prompt=prompt_text,
         size=size,
         quality="standard",   # or "hd"
-        n=1 if "dall-e-3" else num_images
+        n=1 if model == "dall-e-3" else num_images
     )
 
     image_paths = []
@@ -33,8 +33,7 @@ async def generate_story_images(prompt_text, num_images=1, size="1024x1024"):
         elif hasattr(img_data, "url") and img_data.url:
             image_paths.append(img_data.url)
 
-   
-
+    return image_paths   # ✅ return the result
 
 # --- Main App ---
 def setup_dreamcanvas_app():
@@ -56,7 +55,9 @@ def setup_dreamcanvas_app():
             "Dark & Mysterious", "Calm & Peaceful", "Bright & Energetic", "Epic & Dramatic"
         ])
         color_palette = st.multiselect("Colors:", ["Blues", "Reds", "Purples", "Golds"], default=["Blues"])
-        image_count = st.multiselect("Number of Images per Paragraph: (Select 1 for now)", ["1", "2"], default=["1"])
+        
+        # Use selectbox instead of multiselect
+        image_count = int(st.selectbox("Number of Images per Paragraph:", ["1", "2"], index=0))
 
         if st.button("✨ Create Magic"):
             if user_story.strip():
@@ -73,7 +74,7 @@ def setup_dreamcanvas_app():
                     full_prompt = create_visual_prompt(paragraph, chosen_style, mood_slider, art_styles, color_palette)
 
                     # Run async image generator
-                    images = asyncio.run(generate_story_images(full_prompt, num_images=image_count))
+                    images = asyncio.run(generate_story_images(full_prompt, num_images=image_count, model="dall-e-3"))
 
                     for img_idx, img_path in enumerate(images, start=1):
                         st.image(img_path, caption=f"Paragraph {para_idx} - Variation {img_idx}")
