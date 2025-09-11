@@ -12,28 +12,23 @@ def create_visual_prompt(story_text, style_choice, mood_setting, art_styles, col
     return f"{story_text}, {art_styles[style_choice]}, {mood_setting}, {color_desc}, masterpiece quality"
 
 # --- Image Generator using OpenAI ---
-async def generate_story_images(prompt_text, num_images=1, size="1024x1024", model="dall-e-3"):
-    """Generate images using DALL·E"""
-    result = client.images.generate(
-        model=model,
-        prompt=prompt_text,
-        size=size,
-        quality="standard",   # or "hd"
-        n=num_images if model != "dall-e-3" else 1
-    )
+def generate_story_images(story_text, num_images):
+    # Split story into num_images parts (scenes)
+    story_lines = story_text.split("\n\n")  # simple scene splitting
+    scenes = story_lines[:num_images] if len(story_lines) >= num_images else story_lines
+    
+    images = []
+    for i, scene in enumerate(scenes):
+        prompt = f"Illustration for a children's story: {scene}. Bright, friendly, colorful."
+        result = client.images.generate(
+            model="gpt-image-1",
+            prompt=prompt,
+            size="1024x1024",
+            n=1  # one image per scene
+        )
+        images.append(result.data[0].b64_json)
+    return images
 
-    image_paths = []
-    for i, img_data in enumerate(result.data, start=1):
-        if hasattr(img_data, "b64_json") and img_data.b64_json:
-            img_bytes = base64.b64decode(img_data.b64_json)
-            filename = f"dalle_image_{i}.png"
-            with open(filename, "wb") as f:
-                f.write(img_bytes)
-            image_paths.append(filename)
-        elif hasattr(img_data, "url") and img_data.url:
-            image_paths.append(img_data.url)
-
-    return image_paths
 
 # --- Main App ---
 def setup_dreamcanvas_app():
