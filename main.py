@@ -37,7 +37,7 @@ async def generate_story_images(story_text, num_images):
             response = client.images.generate(
                 model="dall-e-2",
                 prompt=prompt[:1000],  # Ensure prompt isn't too long
-                size="256x256",  # Better quality than 256x256
+                size="512x512",  # Better quality than 256x256
                 n=1,
                 response_format="url"  # Get URL instead of base64 for easier handling
             )
@@ -174,14 +174,63 @@ def setup_dreamcanvas_app():
         # Advanced settings
         col1, col2 = st.columns(2)
         with col1:
-            st.subheader("Image Quality")
+            st.subheader("🖼️ Image Quality")
             resolution = st.selectbox("Resolution:", ["512x512", "1024x1024"])
+            model_choice = st.selectbox("AI Model:", ["dall-e-2", "dall-e-3"])
             
-        with col2:
-            st.subheader("Style Options")
-            artistic_influence = st.slider("Artistic Style Intensity", 0.1, 1.0, 0.7)
+            st.subheader("🎭 Character Templates")
+            st.write("Quick character templates:")
+            character_templates = {
+                "Fantasy Adventure": "Hero: brave knight with silver armor, Princess: elegant with flowing blue dress, Dragon: majestic red dragon with golden eyes",
+                "Animal Friends": "Bear: friendly brown bear with a red scarf, Rabbit: small white rabbit with pink nose, Fox: clever orange fox with bright eyes",
+                "Space Adventure": "Astronaut: young explorer in white space suit, Alien: friendly green alien with big eyes, Robot: helpful silver robot with blue lights",
+                "Fairy Tale": "Fairy: tiny fairy with sparkly wings, Wizard: old wise wizard with long beard and pointed hat, Unicorn: white unicorn with rainbow mane"
+            }
+            
+            template_choice = st.selectbox("Choose template:", ["Custom"] + list(character_templates.keys()))
+            if template_choice != "Custom":
+                st.text_area("Template characters:", character_templates[template_choice], disabled=True)
+                if st.button("Use This Template"):
+                    st.session_state.template_characters = character_templates[template_choice]
         
-        st.info("💡 Tip: Higher resolutions cost more API credits but produce better quality images!")
+        with col2:
+            st.subheader("🎨 Style Options")
+            artistic_influence = st.slider("Artistic Style Intensity", 0.1, 1.0, 0.7)
+            
+            st.subheader("🎯 Common Requests")
+            st.write("Click to add to your specific requests:")
+            
+            common_requests = [
+                "magical sparkles and glitter effects",
+                "sunset/sunrise lighting",
+                "Disney/Pixar animation style",
+                "watercolor painting effect",
+                "include a rainbow in background",
+                "show characters as silhouettes",
+                "add speech bubbles with dialogue",
+                "vintage storybook illustration style"
+            ]
+            
+            for request in common_requests:
+                if st.button(f"+ {request}", key=f"req_{request}"):
+                    if 'specific_requests' not in st.session_state:
+                        st.session_state.specific_requests = ""
+                    if request not in st.session_state.specific_requests:
+                        st.session_state.specific_requests += f", {request}" if st.session_state.specific_requests else request
+        
+        st.subheader("💡 Pro Tips")
+        tips = [
+            "**Character Consistency**: Describe characters in detail (age, hair color, clothing) for consistent appearance across scenes",
+            "**Scene Variety**: Use paragraph breaks in your story to create natural scene transitions",
+            "**Visual Details**: Include environmental details (time of day, weather, location) in your story",
+            "**Style Mixing**: Combine different art styles in specific requests for unique looks",
+            "**Color Harmony**: Choose 2-3 colors that work well together for better visual appeal"
+        ]
+        
+        for tip in tips:
+            st.markdown(f"• {tip}")
+        
+        st.info("💡 Higher resolutions and DALL-E 3 cost more API credits but produce better quality images!")
 
 if __name__ == "__main__":
     setup_dreamcanvas_app()
