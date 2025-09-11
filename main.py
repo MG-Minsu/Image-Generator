@@ -96,10 +96,10 @@ def setup_dreamcanvas_app():
                 height=300
             )
 
-            user_add = st.text_area(
-                "📝 Additional Instructions", 
-                placeholder="The character is Red Riding Hood, wearing bright red cape...",
-                height=200
+            # user_add = st.text_area(
+            #     "📝 Additional Instructions", 
+            #     placeholder="The character is Red Riding Hood, wearing bright red cape...",
+            #     height=200
             )
         
         with col2:
