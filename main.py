@@ -122,7 +122,7 @@ def setup_dreamcanvas_app():
             num_images = st.number_input(
                 "📸 How many images?", 
                 min_value=1, 
-                max_value=6,  # Reduced max to prevent API overuse
+                max_value=15,  # Reduced max to prevent API overuse
                 value=3, 
                 step=1
             )
