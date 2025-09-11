@@ -1,3 +1,4 @@
 streamlit
 openai
 streamlit_option_menu
+aiohttp
