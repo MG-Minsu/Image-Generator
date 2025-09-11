@@ -10,12 +10,12 @@ from openai import OpenAI
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
 # --- Prompt Builder ---
-def create_visual_prompt(story_text, style_choice, mood_setting, art_styles, color_palette, user_add=""):
+def create_visual_prompt(story_text, style_choice, mood_setting, art_styles, color_palette"):
     color_desc = ", ".join(color_palette).lower() + " color scheme" if color_palette else ""
-    additional = f", {user_add}" if user_add.strip() else ""
-    return f"{story_text}, {art_styles[style_choice]}, {mood_setting}, {color_desc}{additional}, masterpiece quality"
+ 
+    return f"{story_text}, {art_styles[style_choice]}, {mood_setting}, {color_desc}, masterpiece quality"
 
-async def generate_story_images(story_text, num_images, user_add=""):
+async def generate_story_images(story_text, num_images):
     """Generate images based on story scenes"""
     # Split story into scenes for multiple images
     story_lines = story_text.split("\n\n")
@@ -32,7 +32,7 @@ async def generate_story_images(story_text, num_images, user_add=""):
     for i, scene in enumerate(scenes):
         try:
             # Create a more specific prompt for each scene
-            prompt = f"Friendly children's book illustration: {scene.strip()}. {user_add}. Bright, colorful, happy, storybook style, digital art, high quality."
+            prompt = f"Friendly children's book illustration: {scene.strip()}. Bright, colorful, happy, storybook style, digital art, high quality."
             
             # Generate image
             response = client.images.generate(
