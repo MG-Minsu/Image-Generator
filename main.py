@@ -10,7 +10,7 @@ from openai import OpenAI
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
 # --- Prompt Builder ---
-def create_visual_prompt(story_text, style_choice, mood_setting, art_styles, color_palette"):
+def create_visual_prompt(story_text, style_choice, mood_setting, art_styles, color_palette):
     color_desc = ", ".join(color_palette).lower() + " color scheme" if color_palette else ""
  
     return f"{story_text}, {art_styles[style_choice]}, {mood_setting}, {color_desc}, masterpiece quality"
