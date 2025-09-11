@@ -1,6 +1,9 @@
 import streamlit as st
 import base64
 import asyncio
+import aiohttp
+import io
+from PIL import Image
 from openai import OpenAI
 
 # Initialize OpenAI client
@@ -12,71 +15,173 @@ def create_visual_prompt(story_text, style_choice, mood_setting, art_styles, col
     return f"{story_text}, {art_styles[style_choice]}, {mood_setting}, {color_desc}, masterpiece quality"
 
 async def generate_story_images(story_text, num_images):
-    # Split story into num_images parts (scenes)
+    """Generate images based on story scenes"""
+    # Split story into scenes for multiple images
     story_lines = story_text.split("\n\n")
-    scenes = story_lines[:num_images] if len(story_lines) >= num_images else story_lines
-
+    
+    # If we have fewer paragraphs than requested images, duplicate content
+    if len(story_lines) < num_images:
+        scenes = story_lines * (num_images // len(story_lines) + 1)
+        scenes = scenes[:num_images]
+    else:
+        scenes = story_lines[:num_images]
+    
     images = []
+    
     for i, scene in enumerate(scenes):
-        prompt = f"Friendly children's book illustration: {scene}. Bright, colorful, happy, storybook style."
-        result = client.images.generate(
-            model="dall-e-2",   # ✅ Use DALL·E 2 (cheaper)
-            prompt=prompt,
-            size="256x256",     # ✅ Cheapest resolution
-            n=1
-        )
-        images.append(result.data[0].b64_json)
+        try:
+            # Create a more specific prompt for each scene
+            prompt = f"Friendly children's book illustration: {scene.strip()}. Bright, colorful, happy, storybook style, digital art, high quality."
+            
+            # Generate image
+            response = client.images.generate(
+                model="dall-e-2",
+                prompt=prompt[:1000],  # Ensure prompt isn't too long
+                size="256x256",  # Better quality than 256x256
+                n=1,
+                response_format="url"  # Get URL instead of base64 for easier handling
+            )
+            
+            image_url = response.data[0].url
+            
+            # Download the image
+            async with aiohttp.ClientSession() as session:
+                async with session.get(image_url) as img_response:
+                    if img_response.status == 200:
+                        image_data = await img_response.read()
+                        images.append(image_data)
+                    else:
+                        st.error(f"Failed to download image {i+1}")
+                        
+        except Exception as e:
+            st.error(f"Error generating image {i+1}: {str(e)}")
+            continue
+    
     return images
 
-
+def download_image_button(image_data, filename, label):
+    """Create a download button for image data"""
+    st.download_button(
+        label=label,
+        data=image_data,
+        file_name=filename,
+        mime="image/png"
+    )
 
 # --- Main App ---
 def setup_dreamcanvas_app():
     st.set_page_config(page_title="DreamCanvas", page_icon="🎨", layout="wide")
     st.title("🎨 DreamCanvas — Where Stories Become Art")
-
+    
     # Example styles
     art_styles = {
         "Dreamscape": "ethereal, soft lighting, pastel colors, surreal atmosphere",
         "Comic Book": "bold outlines, vibrant colors, dynamic poses, speech bubbles",
-        "Fantasy Art": "magical elements, rich colors, detailed textures, epic scale"
+        "Fantasy Art": "magical elements, rich colors, detailed textures, epic scale",
+        "Watercolor": "soft brushstrokes, flowing colors, artistic texture",
+        "Cartoon": "simple shapes, bright colors, playful style"
     }
-
-    tab1, _, _ = st.tabs(["🖼️ Create Art", "🎭 Story Gallery", "⚙️ Advanced Studio"])
+    
+    # Fixed the tab creation syntax
+    tab1, tab2, tab3 = st.tabs(["🖼️ Create Art", "🎭 Story Gallery", "⚙️ Advanced Studio"])
+    
     with tab1:
-        user_story = st.text_area("📝 Write your story", placeholder="Once upon a time...")
-        chosen_style = st.selectbox("🎨 Visual Style:", list(art_styles.keys()))
-        mood_slider = st.select_slider("Mood:", options=[
-            "Dark & Mysterious", "Calm & Peaceful", "Bright & Energetic", "Epic & Dramatic"
-        ])
-        color_palette = st.multiselect("Colors:", ["Blues", "Reds", "Purples", "Golds"], default=["Blues"])
-
-        # Number of images directly (no paragraph logic)
-        num_images = st.number_input("📸 How many images to generate?", min_value=1, max_value=10, value=3, step=1)
-
-        if st.button("✨ Create Magic"):
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            user_story = st.text_area(
+                "📝 Write your story", 
+                placeholder="Once upon a time, in a magical forest...",
+                height=200
+            )
+        
+        with col2:
+            chosen_style = st.selectbox("🎨 Visual Style:", list(art_styles.keys()))
+            
+            mood_slider = st.select_slider("🌟 Mood:", options=[
+                "Dark & Mysterious", 
+                "Calm & Peaceful", 
+                "Bright & Energetic", 
+                "Epic & Dramatic"
+            ], value="Bright & Energetic")
+            
+            color_palette = st.multiselect(
+                "🎨 Colors:", 
+                ["Blues", "Reds", "Purples", "Golds", "Greens", "Oranges"], 
+                default=["Blues", "Golds"]
+            )
+            
+            # Number of images
+            num_images = st.number_input(
+                "📸 How many images?", 
+                min_value=1, 
+                max_value=6,  # Reduced max to prevent API overuse
+                value=3, 
+                step=1
+            )
+        
+        if st.button("✨ Create Magic", type="primary"):
             if user_story.strip():
-                st.info(f"Generating {num_images} images based on your story...")
-
-                # Build one main prompt
-                full_prompt = create_visual_prompt(user_story, chosen_style, mood_slider, art_styles, color_palette)
-
-                # Run async image generator
-                images = asyncio.run(generate_story_images(full_prompt, num_images=num_images, model="dall-e-3"))
-
-                for img_idx, img_path in enumerate(images, start=1):
-                    st.image(img_path, caption=f"Story Image {img_idx}")
-                    if isinstance(img_path, str) and img_path.endswith(".png"):
-                        with open(img_path, "rb") as f:
-                            st.download_button(
-                                label=f"💾 Download Image {img_idx}",
-                                data=f,
-                                file_name=f"story_image_{img_idx}.png",
-                                mime="image/png"
-                            )
-
+                with st.spinner(f"Generating {num_images} magical images..."):
+                    try:
+                        # Build the enhanced prompt
+                        full_prompt = create_visual_prompt(
+                            user_story, chosen_style, mood_slider, art_styles, color_palette
+                        )
+                        
+                        # Generate images
+                        images = asyncio.run(generate_story_images(user_story, num_images))
+                        
+                        if images:
+                            st.success(f"✅ Generated {len(images)} images!")
+                            
+                            # Display images in columns
+                            cols = st.columns(min(len(images), 3))
+                            
+                            for img_idx, image_data in enumerate(images):
+                                col_idx = img_idx % len(cols)
+                                
+                                with cols[col_idx]:
+                                    # Convert bytes to PIL Image for display
+                                    image = Image.open(io.BytesIO(image_data))
+                                    st.image(image, caption=f"Story Scene {img_idx + 1}")
+                                    
+                                    # Download button
+                                    download_image_button(
+                                        image_data,
+                                        f"story_image_{img_idx + 1}.png",
+                                        f"💾 Download Image {img_idx + 1}"
+                                    )
+                        else:
+                            st.error("Failed to generate any images. Please try again.")
+                            
+                    except Exception as e:
+                        st.error(f"An error occurred: {str(e)}")
             else:
-                st.warning("Please write a story first!")
+                st.warning("📝 Please write a story first!")
+    
+    with tab2:
+        st.header("🎭 Story Gallery")
+        st.info("This section could showcase previously generated stories and images!")
+        
+        # Placeholder for gallery functionality
+        st.write("Coming soon: Browse and share your created stories!")
+    
+    with tab3:
+        st.header("⚙️ Advanced Studio")
+        st.info("Fine-tune your image generation with advanced settings")
+        
+        # Advanced settings
+        col1, col2 = st.columns(2)
+        with col1:
+            st.subheader("Image Quality")
+            resolution = st.selectbox("Resolution:", ["512x512", "1024x1024"])
+            
+        with col2:
+            st.subheader("Style Options")
+            artistic_influence = st.slider("Artistic Style Intensity", 0.1, 1.0, 0.7)
+        
+        st.info("💡 Tip: Higher resolutions cost more API credits but produce better quality images!")
 
 if __name__ == "__main__":
     setup_dreamcanvas_app()
