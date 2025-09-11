@@ -38,7 +38,7 @@ async def generate_story_images(story_text, num_images, user_add=""):
             response = client.images.generate(
                 model="dall-e-2",
                 prompt=prompt[:1000],  # Ensure prompt isn't too long
-                size="512x512",  # Better quality than 256x256
+                size="256x256",  # Better quality than 256x256
                 n=1,
                 response_format="url"  # Get URL instead of base64 for easier handling
             )
