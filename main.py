@@ -32,7 +32,7 @@ async def generate_story_images(story_text, num_images):
     for i, scene in enumerate(scenes):
         try:
             # Create a more specific prompt for each scene
-            prompt = f"Friendly children's book illustration: {scene.strip()}. Bright, colorful, happy, storybook style, digital art, high quality."
+            prompt = f"Friendly children's book illustration: {scene.strip()}.All of the picture must be at the same art style, storybook style, digital art, high quality. The main character must be present at all times, their expression must be shown exaggerately on their faces. Adapt the scene and background"
             
             # Generate image
             response = client.images.generate(
