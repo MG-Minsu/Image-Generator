@@ -11,23 +11,23 @@ def create_visual_prompt(story_text, style_choice, mood_setting, art_styles, col
     color_desc = ", ".join(color_palette).lower() + " color scheme"
     return f"{story_text}, {art_styles[style_choice]}, {mood_setting}, {color_desc}, masterpiece quality"
 
-# --- Image Generator using OpenAI ---
 def generate_story_images(story_text, num_images):
-    # Split story into num_images parts (scenes)
-    story_lines = story_text.split("\n\n")  # simple scene splitting
+    # Split story into num_images parts (or less if story is short)
+    story_lines = story_text.split("\n\n")
     scenes = story_lines[:num_images] if len(story_lines) >= num_images else story_lines
     
     images = []
     for i, scene in enumerate(scenes):
-        prompt = f"Illustration for a children's story: {scene}. Bright, friendly, colorful."
+        prompt = f"Friendly children's book illustration: {scene}. Bright, colorful, happy, storybook style."
         result = client.images.generate(
             model="gpt-image-1",
             prompt=prompt,
-            size="1024x1024",
-            n=1  # one image per scene
+            size="256x256",   # ✅ cheapest option
+            n=1
         )
         images.append(result.data[0].b64_json)
     return images
+
 
 
 # --- Main App ---
