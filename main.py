@@ -3,6 +3,7 @@ import base64
 import asyncio
 import aiohttp
 import io
+import zipfile
 from PIL import Image
 from openai import OpenAI
 
@@ -68,6 +69,29 @@ def download_image_button(image_data, filename, label):
         file_name=filename,
         mime="image/png"
     )
+
+def create_zip_file(images):
+    """Create a ZIP file containing all images"""
+    zip_buffer = io.BytesIO()
+    
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+        for idx, image_data in enumerate(images):
+            filename = f"story_image_{idx + 1}.png"
+            zip_file.writestr(filename, image_data)
+    
+    zip_buffer.seek(0)
+    return zip_buffer.getvalue()
+
+def download_all_images_button(images):
+    """Create a download button for all images as a ZIP file"""
+    if images:
+        zip_data = create_zip_file(images)
+        st.download_button(
+            label="📦 Download All Pictures (ZIP)",
+            data=zip_data,
+            file_name="story_images.zip",
+            mime="application/zip"
+        )
 
 # --- Main App ---
 def setup_dreamcanvas_app():
@@ -136,6 +160,10 @@ def setup_dreamcanvas_app():
                         
                         if images:
                             st.success(f"✅ Generated {len(images)} images!")
+                            
+                            # Add "Download All Pictures" button at the top
+                            download_all_images_button(images)
+                            st.divider()
                             
                             # Display images in columns
                             cols = st.columns(min(len(images), 3))
