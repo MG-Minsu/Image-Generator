@@ -132,7 +132,7 @@ def setup_dreamcanvas_app():
                 with st.spinner(f"Generating {num_images} magical images..."):
                     try:
                         # Generate images
-                        images = asyncio.run(generate_story_images(user_story, num_images, user_add))
+                        images = asyncio.run(generate_story_images(user_story, num_images))
                         
                         if images:
                             st.success(f"✅ Generated {len(images)} images!")
