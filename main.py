@@ -100,7 +100,7 @@ def setup_dreamcanvas_app():
             #     "📝 Additional Instructions", 
             #     placeholder="The character is Red Riding Hood, wearing bright red cape...",
             #     height=200
-            )
+            # )
         
         with col2:
             chosen_style = st.selectbox("🎨 Visual Style:", list(art_styles.keys()))
