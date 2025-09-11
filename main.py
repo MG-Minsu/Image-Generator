@@ -15,11 +15,11 @@ def create_visual_prompt(story_text, style_choice, mood_setting, art_styles, col
 async def generate_story_images(prompt_text, num_images=1, size="1024x1024", model="dall-e-3"):
     """Generate images using DALL·E"""
     result = client.images.generate(
-        model=model,  
+        model=model,
         prompt=prompt_text,
         size=size,
         quality="standard",   # or "hd"
-        n=1 if model == "dall-e-3" else num_images
+        n=num_images if model != "dall-e-3" else 1
     )
 
     image_paths = []
@@ -33,7 +33,7 @@ async def generate_story_images(prompt_text, num_images=1, size="1024x1024", mod
         elif hasattr(img_data, "url") and img_data.url:
             image_paths.append(img_data.url)
 
-    return image_paths   # ✅ return the result
+    return image_paths
 
 # --- Main App ---
 def setup_dreamcanvas_app():
@@ -49,43 +49,36 @@ def setup_dreamcanvas_app():
 
     tab1, _, _ = st.tabs(["🖼️ Create Art", "🎭 Story Gallery", "⚙️ Advanced Studio"])
     with tab1:
-        user_story = st.text_area("📝 Write your story", placeholder="Once upon a time...\n\nSecond paragraph here...")
+        user_story = st.text_area("📝 Write your story", placeholder="Once upon a time...")
         chosen_style = st.selectbox("🎨 Visual Style:", list(art_styles.keys()))
         mood_slider = st.select_slider("Mood:", options=[
             "Dark & Mysterious", "Calm & Peaceful", "Bright & Energetic", "Epic & Dramatic"
         ])
         color_palette = st.multiselect("Colors:", ["Blues", "Reds", "Purples", "Golds"], default=["Blues"])
-        
-        # Use selectbox instead of multiselect
-        image_count = int(st.selectbox("Number of Images per Paragraph:", ["1", "2"], index=0))
+
+        # Number of images directly (no paragraph logic)
+        num_images = st.number_input("📸 How many images to generate?", min_value=1, max_value=10, value=3, step=1)
 
         if st.button("✨ Create Magic"):
             if user_story.strip():
-                # Split story into paragraphs (based on blank line)
-                paragraphs = [p.strip() for p in user_story.split("\n\n") if p.strip()]
+                st.info(f"Generating {num_images} images based on your story...")
 
-                st.info(f"Generating {len(paragraphs) * image_count} images ({len(paragraphs)} paragraphs × {image_count} each)...")
+                # Build one main prompt
+                full_prompt = create_visual_prompt(user_story, chosen_style, mood_slider, art_styles, color_palette)
 
-                for para_idx, paragraph in enumerate(paragraphs, start=1):
-                    st.subheader(f"📖 Paragraph {para_idx}")
-                    st.write(paragraph)
+                # Run async image generator
+                images = asyncio.run(generate_story_images(full_prompt, num_images=num_images, model="dall-e-3"))
 
-                    # Build prompt for this paragraph
-                    full_prompt = create_visual_prompt(paragraph, chosen_style, mood_slider, art_styles, color_palette)
-
-                    # Run async image generator
-                    images = asyncio.run(generate_story_images(full_prompt, num_images=image_count, model="dall-e-3"))
-
-                    for img_idx, img_path in enumerate(images, start=1):
-                        st.image(img_path, caption=f"Paragraph {para_idx} - Variation {img_idx}")
-                        if isinstance(img_path, str) and img_path.endswith(".png"):
-                            with open(img_path, "rb") as f:
-                                st.download_button(
-                                    label=f"💾 Download Paragraph {para_idx} - Variation {img_idx}",
-                                    data=f,
-                                    file_name=f"story_para{para_idx}_var{img_idx}.png",
-                                    mime="image/png"
-                                )
+                for img_idx, img_path in enumerate(images, start=1):
+                    st.image(img_path, caption=f"Story Image {img_idx}")
+                    if isinstance(img_path, str) and img_path.endswith(".png"):
+                        with open(img_path, "rb") as f:
+                            st.download_button(
+                                label=f"💾 Download Image {img_idx}",
+                                data=f,
+                                file_name=f"story_image_{img_idx}.png",
+                                mime="image/png"
+                            )
 
             else:
                 st.warning("Please write a story first!")
