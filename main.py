@@ -5,7 +5,7 @@ import os
 st.title("FLUX SCHNELL Image Generator")
 
 # API key input
-api_key =  REPLICATE_API_TOKEN 
+api_key =  "REPLICATE_API_TOKEN"
 
 # Input parameters
 prompt = st.text_area("Prompt", 
