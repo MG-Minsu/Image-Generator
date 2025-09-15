@@ -96,28 +96,32 @@ def create_image_prompt(scene_text, style="cinematic"):
     return style_templates.get(style, f"{clean_text}, {style}, high quality, detailed")
 
 def generate_flux_image(prompt):
-    """Generate image using Flux Schnell"""
+    """Generate image using Flux Schnell with cleaner API format"""
     try:
+        input_params = {
+            "prompt": prompt,
+            "go_fast": True,
+            "megapixels": "1",
+            "num_outputs": 1,
+            "aspect_ratio": "16:9",
+            "output_format": "webp",
+            "output_quality": 85,
+            "num_inference_steps": 4
+        }
+        
         output = replicate.run(
             "black-forest-labs/flux-schnell",
-            input={
-                "prompt": prompt,
-                "go_fast": True,
-                "megapixels": "1",
-                "num_outputs": 1,
-                "aspect_ratio": "16:9",
-                "output_format": "webp",
-                "output_quality": 85,
-                "num_inference_steps": 4
-            }
+            input=input_params
         )
         
+        # Access the file and download it
         if output and len(output) > 0:
-            image_url = output[0]
-            response = requests.get(image_url, timeout=60)
+            # Get the first (and only) output
+            image_file = output[0]
             
-            if response.status_code == 200:
-                return response.content
+            # Read the image data directly
+            image_data = image_file.read()
+            return image_data
         
         return None
         
