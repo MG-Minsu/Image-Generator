@@ -204,8 +204,7 @@ if uploaded_file is not None:
                         image.save(buf, format='PNG')
                         image_data_for_download.append((buf.getvalue(), f"srt_image_{i+1}.png"))
                     
-                    # Small delay to avoid rate limiting
-                    time.sleep(1)
+                    # Small delay to avoid rate limitin
                 
                 progress_bar.progress(1.0)
                 status_text.text("All images generated!")
