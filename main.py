@@ -95,40 +95,90 @@ def create_image_prompt(scene_text, style="cinematic"):
     
     return style_templates.get(style, f"{clean_text}, {style}, high quality, detailed")
 
-def generate_flux_image(prompt):
-    """Generate image using Flux Schnell with cleaner API format"""
+import replicate
+import streamlit as st
+import requests
+import io
+
+def generate_flux_image(prompt, max_retries=3):
+    """
+    Generate image using Flux Schnell with improved error handling
+    """
+    for attempt in range(max_retries):
+        try:
+            st.write(f"🎨 Generating: {prompt[:50]}...")
+            
+            input_params = {
+                "prompt": prompt,
+                "go_fast": True,
+                "megapixels": "1",
+                "num_outputs": 1,
+                "aspect_ratio": "16:9",
+                "output_format": "webp",
+                "output_quality": 85,
+                "num_inference_steps": 4
+            }
+            
+            # Run the model
+            output = replicate.run(
+                "black-forest-labs/flux-schnell",
+                input=input_params
+            )
+            
+            # Check if we got output
+            if not output or len(output) == 0:
+                raise Exception("No output received from model")
+            
+            # Get the first output (should be a file-like object or URL)
+            image_output = output[0]
+            
+            # Handle different output types
+            if hasattr(image_output, 'read'):
+                # It's a file-like object, read directly
+                image_data = image_output.read()
+            elif isinstance(image_output, str) and image_output.startswith('http'):
+                # It's a URL, download the image
+                response = requests.get(image_output, timeout=30)
+                response.raise_for_status()
+                image_data = response.content
+            else:
+                raise Exception(f"Unexpected output type: {type(image_output)}")
+            
+            # Validate we got image data
+            if not image_data or len(image_data) < 1000:  # Very small files are likely errors
+                raise Exception("Received empty or invalid image data")
+            
+            st.success(f"✅ Generated image ({len(image_data)/1024:.1f} KB)")
+            return image_data
+            
+        except Exception as e:
+            error_msg = str(e)
+            st.warning(f"⚠️ Attempt {attempt + 1}/{max_retries} failed: {error_msg}")
+            
+            if attempt == max_retries - 1:  # Last attempt
+                st.error(f"❌ Failed to generate image after {max_retries} attempts: {error_msg}")
+                return None
+    
+    return None
+
+def test_api_connection():
+    """Test if Replicate API is properly configured"""
     try:
-        input_params = {
-            "prompt": prompt,
-            "go_fast": True,
-            "megapixels": "1",
-            "num_outputs": 1,
-            "aspect_ratio": "16:9",
-            "output_format": "webp",
-            "output_quality": 85,
-            "num_inference_steps": 4
-        }
-        
+        # Try to run a very simple test
         output = replicate.run(
             "black-forest-labs/flux-schnell",
-            input=input_params
+            input={
+                "prompt": "test",
+                "go_fast": True,
+                "megapixels": "0.25",  # Smallest size for testing
+                "num_outputs": 1,
+                "num_inference_steps": 1  # Fastest generation
+            }
         )
-        
-        # Access the file and download it
-        if output and len(output) > 0:
-            # Get the first (and only) output
-            image_file = output[0]
-            
-            # Read the image data directly
-            image_data = image_file.read()
-            return image_data
-        
-        return None
-        
+        return True
     except Exception as e:
-        st.error(f"Image generation error: {str(e)}")
-        return None
-
+        st.error(f"API connection test failed: {str(e)}")
+        return False
 def create_filename_from_timestamp(timestamp, scene_num):
     """Create clean filename from SRT timestamp"""
     # Convert 00:01:23,456 to 00-01-23-456
