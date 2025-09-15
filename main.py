@@ -6,7 +6,6 @@ import io
 import zipfile
 from PIL import Image
 import google.generativeai as genai
-import requests
 
 # Configure Gemini
 genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
@@ -14,42 +13,45 @@ genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 # --- Prompt Builder ---
 def create_visual_prompt(story_text, style_choice, mood_setting, art_styles, color_palette):
     color_desc = ", ".join(color_palette).lower() + " color scheme" if color_palette else ""
- 
     return f"{story_text}, {art_styles[style_choice]}, {mood_setting}, {color_desc}, masterpiece quality"
 
-def generate_enhanced_scene_prompt(scene_text):
+def generate_enhanced_scene_prompt(scene_text, style_choice, mood_setting, art_styles, color_palette):
     """Use Gemini to enhance scene descriptions for better image generation"""
     try:
         model = genai.GenerativeModel('gemini-1.5-flash')
         
-        enhancement_prompt = f"""
-        Transform this story scene into a detailed visual description suitable for image generation:
+        # Create base visual prompt
+        base_prompt = create_visual_prompt(scene_text, style_choice, mood_setting, art_styles, color_palette)
         
-        Scene: {scene_text}
+        enhancement_prompt = f"""
+        Transform this story scene into a detailed visual description perfect for image generation:
+        
+        Scene: {base_prompt}
         
         Create a vivid, detailed description that includes:
         - Main characters and their expressions
         - Setting and environment details
         - Lighting and atmosphere
-        - Visual style elements
-        - Composition suggestions
+        - Visual composition
+        - Specific artistic elements
         
         Keep it concise but visually rich, suitable for children's book illustration style.
+        Format as a single paragraph description perfect for the Imagen AI model.
         """
         
         response = model.generate_content(enhancement_prompt)
         return response.text.strip()
     except Exception as e:
         st.warning(f"Scene enhancement failed: {str(e)}")
-        return scene_text
+        return create_visual_prompt(scene_text, style_choice, mood_setting, art_styles, color_palette)
 
-async def generate_story_images_with_dalle(story_text, num_images):
-    """Generate images using DALL-E via external API (since Gemini doesn't generate images directly)"""
-    # Note: You'll still need an image generation service
-    # This is a placeholder for image generation logic
+async def generate_story_images(story_text, num_images, style_choice, mood_setting, art_styles, color_palette):
+    """Generate images using Google's Imagen 4.0 model"""
     
+    # Split story into scenes
     story_lines = story_text.split("\n\n")
     
+    # If we have fewer paragraphs than requested images, duplicate content
     if len(story_lines) < num_images:
         scenes = story_lines * (num_images // len(story_lines) + 1)
         scenes = scenes[:num_images]
@@ -58,83 +60,37 @@ async def generate_story_images_with_dalle(story_text, num_images):
     
     images = []
     
-    # Use Gemini to enhance each scene description
-    enhanced_scenes = []
-    for scene in scenes:
-        enhanced_scene = generate_enhanced_scene_prompt(scene)
-        enhanced_scenes.append(enhanced_scene)
-    
-    # For actual image generation, you would need to use:
-    # 1. A different image generation API (DALL-E, Midjourney, Stable Diffusion)
-    # 2. Or integrate with Google's Imagen (if available)
-    # 3. Or use a service like Replicate
-    
-    # Placeholder: Generate mock images (you'll replace this with actual image generation)
-    for i, enhanced_scene in enumerate(enhanced_scenes):
+    for i, scene in enumerate(scenes):
         try:
-            # This is where you'd call your image generation API
-            # For now, creating a placeholder
-            st.info(f"Enhanced scene {i+1}: {enhanced_scene[:100]}...")
+            # Enhance the scene prompt using Gemini
+            enhanced_prompt = generate_enhanced_scene_prompt(
+                scene.strip(), style_choice, mood_setting, art_styles, color_palette
+            )
             
-            # Placeholder for actual image generation
-            # You could use services like:
-            # - Replicate API with Stable Diffusion
-            # - Hugging Face Inference API
-            # - Any other image generation service
+            # Display the enhanced prompt to user
+            st.write(f"**Scene {i+1} Enhanced Prompt:** {enhanced_prompt}")
             
+            # Generate image using Imagen 4.0
+            imagen_model = genai.GenerativeModel('imagen-4.0-generate-001')
+            
+            response = imagen_model.generate_content([enhanced_prompt])
+            
+            # Extract image data
+            if response.parts and len(response.parts) > 0:
+                image_part = response.parts[0]
+                if hasattr(image_part, 'data'):
+                    image_data = image_part.data
+                    images.append(image_data)
+                else:
+                    st.error(f"No image data received for scene {i+1}")
+            else:
+                st.error(f"No response parts received for scene {i+1}")
+                
         except Exception as e:
-            st.error(f"Error processing scene {i+1}: {str(e)}")
+            st.error(f"Error generating image {i+1}: {str(e)}")
             continue
     
     return images
-
-def generate_story_with_gemini(user_input, style_preferences):
-    """Generate or enhance story using Gemini"""
-    try:
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        
-        story_prompt = f"""
-        Based on this input: {user_input}
-        
-        Create or enhance this into a beautiful children's story with the following characteristics:
-        - Style: {style_preferences}
-        - Suitable for children
-        - Vivid, descriptive scenes
-        - Engaging narrative
-        - 3-5 paragraphs
-        - Each paragraph should be a distinct scene that could be illustrated
-        
-        Make sure each paragraph describes a specific moment or scene that would work well as an illustration.
-        """
-        
-        response = model.generate_content(story_prompt)
-        return response.text.strip()
-    except Exception as e:
-        st.error(f"Story generation failed: {str(e)}")
-        return user_input
-
-def analyze_story_with_gemini(story_text):
-    """Analyze story to provide insights and suggestions"""
-    try:
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        
-        analysis_prompt = f"""
-        Analyze this children's story and provide:
-        1. Main themes
-        2. Key characters
-        3. Visual elements that would work well in illustrations
-        4. Suggested art style
-        5. Color palette recommendations
-        
-        Story: {story_text}
-        
-        Provide a brief, helpful analysis.
-        """
-        
-        response = model.generate_content(analysis_prompt)
-        return response.text.strip()
-    except Exception as e:
-        return "Analysis unavailable"
 
 def download_image_button(image_data, filename, label):
     """Create a download button for image data"""
@@ -170,8 +126,9 @@ def download_all_images_button(images):
 
 # --- Main App ---
 def setup_dreamcanvas_app():
-    st.set_page_config(page_title="DreamCanvas with Gemini", page_icon="🎨", layout="wide")
-    st.title("🎨 DreamCanvas — AI-Powered Stories with Gemini")
+    st.set_page_config(page_title="DreamCanvas - Imagen 4.0", page_icon="🎨", layout="wide")
+    st.title("🎨 DreamCanvas — AI Image Generation with Imagen 4.0")
+    st.write("Transform your stories into beautiful images using Google's Imagen 4.0 and Gemini AI")
     
     # Example styles
     art_styles = {
@@ -179,179 +136,131 @@ def setup_dreamcanvas_app():
         "Comic Book": "bold outlines, vibrant colors, dynamic poses, speech bubbles",
         "Fantasy Art": "magical elements, rich colors, detailed textures, epic scale",
         "Watercolor": "soft brushstrokes, flowing colors, artistic texture",
-        "Cartoon": "simple shapes, bright colors, playful style"
+        "Cartoon": "simple shapes, bright colors, playful style",
+        "Realistic": "photorealistic, detailed textures, natural lighting",
+        "Anime": "anime style, expressive eyes, dynamic poses, vibrant colors",
+        "Children's Book": "friendly children's book illustration, warm colors, inviting characters"
     }
     
-    tab1, tab2, tab3, tab4 = st.tabs(["🖼️ Create Art", "📚 Story Generator", "🔍 Story Analyzer", "⚙️ Advanced Studio"])
+    col1, col2 = st.columns([2, 1])
     
-    with tab1:
-        st.header("🖼️ Create Illustrated Stories")
+    with col1:
+        user_story = st.text_area(
+            "📝 Write your story", 
+            placeholder="Once upon a time, in a magical forest, a little fox discovered a glowing crystal...\n\nThe fox touched the crystal and suddenly could understand all the forest animals...\n\nTogether, they embarked on an adventure to save their home from an evil wizard...",
+            height=300,
+            help="Write your story with each paragraph as a separate scene. Each paragraph will become one image."
+        )
+    
+    with col2:
+        chosen_style = st.selectbox("🎨 Visual Style:", list(art_styles.keys()), index=7)  # Default to Children's Book
         
-        col1, col2 = st.columns([2, 1])
+        mood_slider = st.select_slider("🌟 Mood:", options=[
+            "Dark & Mysterious", 
+            "Calm & Peaceful", 
+            "Bright & Energetic", 
+            "Epic & Dramatic"
+        ], value="Bright & Energetic")
         
-        with col1:
-            user_story = st.text_area(
-                "📝 Write your story", 
-                placeholder="Once upon a time, in a magical forest...",
-                height=300
-            )
+        color_palette = st.multiselect(
+            "🎨 Colors:", 
+            ["Blues", "Reds", "Purples", "Golds", "Greens", "Oranges", "Pinks", "Silvers"], 
+            default=["Blues", "Golds"]
+        )
         
-        with col2:
-            chosen_style = st.selectbox("🎨 Visual Style:", list(art_styles.keys()))
-            
-            mood_slider = st.select_slider("🌟 Mood:", options=[
-                "Dark & Mysterious", 
-                "Calm & Peaceful", 
-                "Bright & Energetic", 
-                "Epic & Dramatic"
-            ], value="Bright & Energetic")
-            
-            color_palette = st.multiselect(
-                "🎨 Colors:", 
-                ["Blues", "Reds", "Purples", "Golds", "Greens", "Oranges"], 
-                default=["Blues", "Golds"]
-            )
-            
-            num_images = st.number_input(
-                "📸 How many images?", 
-                min_value=1, 
-                max_value=10,
-                value=3, 
-                step=1
-            )
-        
-        if st.button("✨ Enhance Story & Create Scenes", type="primary"):
-            if user_story.strip():
-                with st.spinner("🤖 Gemini is analyzing your story..."):
-                    # Use Gemini to enhance the story
-                    style_desc = f"{art_styles[chosen_style]}, {mood_slider}"
-                    enhanced_story = generate_story_with_gemini(user_story, style_desc)
+        num_images = st.number_input(
+            "📸 How many images?", 
+            min_value=1, 
+            max_value=10,
+            value=3, 
+            step=1,
+            help="Number of scenes/images to generate"
+        )
+    
+    if st.button("✨ Generate Images with Imagen 4.0", type="primary"):
+        if user_story.strip():
+            with st.spinner(f"🎨 Generating {num_images} images with Imagen 4.0..."):
+                try:
+                    # Generate images using Imagen 4.0
+                    images = asyncio.run(generate_story_images(
+                        user_story, num_images, chosen_style, mood_slider, art_styles, color_palette
+                    ))
                     
-                    st.subheader("📖 Enhanced Story")
-                    st.write(enhanced_story)
-                    
-                    # Analyze the story
-                    analysis = analyze_story_with_gemini(enhanced_story)
-                    
-                    with st.expander("🔍 Story Analysis"):
-                        st.write(analysis)
-                    
-                    # Generate scene descriptions for illustration
-                    story_scenes = enhanced_story.split("\n\n")
-                    
-                    st.subheader("🎨 Scene Descriptions for Illustration")
-                    for i, scene in enumerate(story_scenes[:num_images], 1):
-                        enhanced_scene = generate_enhanced_scene_prompt(scene)
+                    if images:
+                        st.success(f"✅ Generated {len(images)} images!")
                         
-                        with st.expander(f"Scene {i}"):
-                            st.write("**Original Scene:**")
-                            st.write(scene)
-                            st.write("**Enhanced for Illustration:**")
-                            st.write(enhanced_scene)
-                    
-                    st.info("💡 **Note:** To generate actual images, you'll need to integrate with an image generation service like DALL-E, Stable Diffusion, or Midjourney API, as Gemini focuses on text generation.")
-            else:
-                st.warning("📝 Please write a story first!")
+                        # Add "Download All Pictures" button at the top
+                        download_all_images_button(images)
+                        st.divider()
+                        
+                        # Display images in columns
+                        cols = st.columns(min(len(images), 3))
+                        
+                        for img_idx, image_data in enumerate(images):
+                            col_idx = img_idx % len(cols)
+                            
+                            with cols[col_idx]:
+                                # Convert bytes to PIL Image for display
+                                try:
+                                    image = Image.open(io.BytesIO(image_data))
+                                    st.image(image, caption=f"Story Scene {img_idx + 1}")
+                                    
+                                    # Download button
+                                    download_image_button(
+                                        image_data,
+                                        f"story_image_{img_idx + 1}.png",
+                                        f"💾 Download Image {img_idx + 1}"
+                                    )
+                                except Exception as e:
+                                    st.error(f"Error displaying image {img_idx + 1}: {str(e)}")
+                        
+                    else:
+                        st.error("Failed to generate any images. Please try again.")
+                        
+                except Exception as e:
+                    st.error(f"An error occurred: {str(e)}")
+                    st.info("Make sure you have access to the Imagen 4.0 model and your API key is properly configured.")
+        else:
+            st.warning("📝 Please write a story first!")
     
-    with tab2:
-        st.header("📚 AI Story Generator")
-        st.write("Let Gemini create a story based on your ideas!")
+    # Instructions section
+    with st.expander("📖 How to Use DreamCanvas"):
+        st.write("""
+        **Step 1:** Write your story in the text area, with each paragraph representing a different scene.
         
-        col1, col2 = st.columns([2, 1])
+        **Step 2:** Choose your visual style, mood, and color preferences.
         
-        with col1:
-            story_prompt = st.text_area(
-                "💭 Describe your story idea:",
-                placeholder="A brave little mouse who wants to become a knight...",
-                height=150
-            )
-            
-            story_elements = st.multiselect(
-                "📋 Include these elements:",
-                ["Magic", "Friendship", "Adventure", "Animals", "Castle", "Forest", "Ocean", "Dragons", "Treasure", "Mystery"],
-                default=["Friendship", "Adventure"]
-            )
+        **Step 3:** Set how many images you want to generate.
         
-        with col2:
-            target_age = st.selectbox("👶 Target Age:", ["3-5 years", "6-8 years", "9-12 years"])
-            story_length = st.select_slider("📏 Story Length:", ["Short", "Medium", "Long"], value="Medium")
-            story_theme = st.selectbox("🎭 Theme:", ["Courage", "Kindness", "Learning", "Family", "Nature", "Magic"])
+        **Step 4:** Click "Generate Images with Imagen 4.0" to create your illustrations.
         
-        if st.button("📝 Generate Story", type="primary"):
-            if story_prompt.strip():
-                with st.spinner("🤖 Gemini is creating your story..."):
-                    elements_text = ", ".join(story_elements) if story_elements else ""
-                    full_prompt = f"{story_prompt}. Include: {elements_text}. Theme: {story_theme}. For {target_age}."
-                    
-                    generated_story = generate_story_with_gemini(full_prompt, f"{story_length} length, {story_theme} theme")
-                    
-                    st.subheader("📖 Your Generated Story")
-                    st.write(generated_story)
-                    
-                    # Offer to analyze the generated story
-                    if st.button("🔍 Analyze This Story"):
-                        analysis = analyze_story_with_gemini(generated_story)
-                        st.subheader("📊 Story Analysis")
-                        st.write(analysis)
+        **Step 5:** Download individual images or all images as a ZIP file.
+        
+        **Tips for better results:**
+        - Write clear, descriptive scenes
+        - Each paragraph should describe one specific moment
+        - Include character descriptions and emotions
+        - Describe the setting and atmosphere
+        - Be specific about visual details you want to see
+        """)
     
-    with tab3:
-        st.header("🔍 Story Analyzer")
-        st.write("Get AI insights about your story!")
+    # Technical info
+    with st.expander("🔧 Technical Information"):
+        st.write("""
+        **Powered by:**
+        - **Imagen 4.0**: Google's latest image generation model for high-quality, creative images
+        - **Gemini 1.5 Flash**: For enhancing story prompts with detailed visual descriptions
         
-        analysis_story = st.text_area(
-            "📝 Paste your story here for analysis:",
-            height=300
-        )
+        **Requirements:**
+        - Google AI API key with access to Imagen 4.0 model
+        - Gemini API access for prompt enhancement
         
-        if st.button("🔍 Analyze Story", type="primary"):
-            if analysis_story.strip():
-                with st.spinner("🤖 Analyzing your story..."):
-                    analysis = analyze_story_with_gemini(analysis_story)
-                    
-                    st.subheader("📊 Analysis Results")
-                    st.write(analysis)
-    
-    with tab4:
-        st.header("⚙️ Advanced Studio")
-        st.info("Advanced features powered by Gemini AI")
-        
-        st.subheader("🎨 Custom Art Direction")
-        art_direction = st.text_area(
-            "Describe your artistic vision:",
-            placeholder="I want a whimsical, hand-drawn style with soft watercolors...",
-            height=100
-        )
-        
-        st.subheader("🎭 Character Development")
-        character_description = st.text_area(
-            "Describe your main character:",
-            placeholder="A small dragon with purple scales and kind eyes...",
-            height=100
-        )
-        
-        st.subheader("🌍 World Building")
-        world_description = st.text_area(
-            "Describe the story world:",
-            placeholder="A floating city in the clouds with rainbow bridges...",
-            height=100
-        )
-        
-        if st.button("🚀 Generate Advanced Story Concept"):
-            if any([art_direction.strip(), character_description.strip(), world_description.strip()]):
-                with st.spinner("🤖 Creating advanced story concept..."):
-                    advanced_prompt = f"""
-                    Create a detailed children's story concept with:
-                    Art Direction: {art_direction}
-                    Main Character: {character_description}
-                    World: {world_description}
-                    
-                    Provide a complete story outline with detailed scene descriptions.
-                    """
-                    
-                    concept = generate_story_with_gemini(advanced_prompt, "detailed concept development")
-                    
-                    st.subheader("🎨 Advanced Story Concept")
-                    st.write(concept)
+        **Features:**
+        - AI-enhanced prompts for better image quality
+        - Multiple art styles and mood options
+        - Batch image generation and download
+        - High-quality outputs suitable for children's books
+        """)
 
 if __name__ == "__main__":
     # Check if Gemini API key is configured
@@ -359,4 +268,5 @@ if __name__ == "__main__":
         setup_dreamcanvas_app()
     except Exception as e:
         st.error("Please configure your GEMINI_API_KEY in Streamlit secrets")
+        st.info("Get your API key from: https://makersuite.google.com/app/apikey")
         st.stop()
