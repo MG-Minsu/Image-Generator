@@ -81,11 +81,9 @@ def enhance_prompt(text, style="cinematic"):
     
     return prompt
 
-def generate_image(prompt, api_token):
+def generate_image(prompt):
     """Generate image using Flux Schnell"""
     try:
-        replicate.api_token = api_token
-        
         output = replicate.run(
             "black-forest-labs/flux-schnell",
             input={
