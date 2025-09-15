@@ -242,13 +242,38 @@ class FluxReplicateGenerator:
     
     def __init__(self, api_token):
         self.api_token = api_token
-        # Set the Replicate API token
+        
+        # Set the API token in multiple ways to ensure it works
+        import os
+        os.environ['REPLICATE_API_TOKEN'] = api_token
         replicate.api_token = api_token
+        
+        # Test the connection
+        self._test_connection()
+    
+    def _test_connection(self):
+        """Test the Replicate API connection"""
+        try:
+            # Try to list models to test authentication
+            response = replicate.models.list()
+            st.success("🔗 Successfully connected to Replicate API")
+        except Exception as e:
+            error_msg = str(e)
+            if "authentication" in error_msg.lower() or "unauthorized" in error_msg.lower():
+                st.error("❌ Authentication failed. Please check your API token.")
+                st.info("Make sure your token starts with 'r8_' and is from https://replicate.com/account/api-tokens")
+            else:
+                st.warning(f"⚠️ Connection test failed: {error_msg}")
     
     def generate_scene_image(self, prompt, image_settings, max_retries=3):
         """Generate image using Flux Schnell via Replicate"""
         for attempt in range(max_retries):
             try:
+                # Ensure API token is set before each request
+                import os
+                os.environ['REPLICATE_API_TOKEN'] = self.api_token
+                replicate.api_token = self.api_token
+                
                 # Prepare input for Flux Schnell
                 input_params = {
                     "prompt": prompt,
@@ -261,6 +286,8 @@ class FluxReplicateGenerator:
                     "num_inference_steps": image_settings.get('num_inference_steps', 4)
                 }
                 
+                st.info(f"🎨 Generating with prompt: {prompt[:100]}...")
+                
                 # Generate image using Replicate
                 output = replicate.run(
                     "black-forest-labs/flux-schnell",
@@ -270,9 +297,12 @@ class FluxReplicateGenerator:
                 # Download the generated image
                 if output and len(output) > 0:
                     image_url = output[0]
+                    st.info(f"📥 Downloading from: {image_url}")
+                    
                     response = requests.get(image_url, timeout=60)
                     
                     if response.status_code == 200:
+                        st.success("✅ Image generated successfully")
                         return response.content
                     else:
                         st.error(f"Failed to download image: HTTP {response.status_code}")
@@ -281,9 +311,13 @@ class FluxReplicateGenerator:
                     st.error("No output received from Flux Schnell")
                     return None
                 
-            except Exception as e:
+            except replicate.exceptions.ReplicateError as e:
                 error_msg = str(e)
-                if "rate limit" in error_msg.lower():
+                if "authentication" in error_msg.lower() or "unauthorized" in error_msg.lower():
+                    st.error("❌ Authentication failed. Please verify your API token.")
+                    st.info("Get a new token from: https://replicate.com/account/api-tokens")
+                    return None
+                elif "rate limit" in error_msg.lower():
                     if attempt < max_retries - 1:
                         st.warning(f"Rate limit hit. Waiting 30 seconds before retry {attempt + 1}/{max_retries}...")
                         import time
@@ -292,17 +326,23 @@ class FluxReplicateGenerator:
                     else:
                         st.error("Rate limit exceeded. Please try again later.")
                         return None
-                elif "authentication" in error_msg.lower():
-                    st.error("Authentication failed. Please check your Replicate API token.")
-                    return None
                 else:
-                    st.error(f"Image generation failed: {error_msg}")
+                    st.error(f"Replicate API error: {error_msg}")
                     if attempt < max_retries - 1:
                         st.info(f"Retrying... (attempt {attempt + 1}/{max_retries})")
                         import time
                         time.sleep(10)
                         continue
                     return None
+            except Exception as e:
+                error_msg = str(e)
+                st.error(f"Unexpected error: {error_msg}")
+                if attempt < max_retries - 1:
+                    st.info(f"Retrying... (attempt {attempt + 1}/{max_retries})")
+                    import time
+                    time.sleep(10)
+                    continue
+                return None
         
         return None
 
