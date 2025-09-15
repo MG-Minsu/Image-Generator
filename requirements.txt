@@ -1,7 +1,5 @@
 streamlit
-openai
 streamlit_option_menu
 aiohttp
-google-generativeai
 replicate
-time
+
