@@ -27,33 +27,30 @@ with col2:
 num_inference_steps = st.slider("Inference steps", 1, 10, 4)
 
 if st.button("Generate Image"):
-    if not api_key:
-        st.error("Please enter your Replicate API token")
-    else:
-        try:
-            with st.spinner("Generating..."):
-                output = replicate.run(
-                    "black-forest-labs/flux-schnell",
-                    input={
-                        "prompt": prompt,
-                        "go_fast": go_fast,
-                        "megapixels": megapixels,
-                        "num_outputs": num_outputs,
-                        "aspect_ratio": aspect_ratio,
-                        "output_format": output_format,
-                        "output_quality": output_quality,
-                        "num_inference_steps": num_inference_steps
-                    }
-                )
+    try:
+        with st.spinner("Generating..."):
+            output = replicate.run(
+                "black-forest-labs/flux-schnell",
+                input={
+                    "prompt": prompt,
+                    "go_fast": go_fast,
+                    "megapixels": megapixels,
+                    "num_outputs": num_outputs,
+                    "aspect_ratio": aspect_ratio,
+                    "output_format": output_format,
+                    "output_quality": output_quality,
+                    "num_inference_steps": num_inference_steps
+                }
+            )
+            
+            for i, image in enumerate(output):
+                st.image(image.url())
                 
-                for i, image in enumerate(output):
-                    st.image(image.url())
+                # Download button
+                if st.button(f"Save Image {i+1}", key=f"save_{i}"):
+                    with open(f"flux_image_{i}.{output_format}", "wb") as file:
+                        file.write(image.read())
+                    st.success(f"Image saved as flux_image_{i}.{output_format}")
                     
-                    # Download button
-                    if st.button(f"Save Image {i+1}", key=f"save_{i}"):
-                        with open(f"flux_image_{i}.{output_format}", "wb") as file:
-                            file.write(image.read())
-                        st.success(f"Image saved as flux_image_{i}.{output_format}")
-                        
-        except Exception as e:
-            st.error(f"Error: {e}")
+    except Exception as e:
+        st.error(f"Error: {e}")
