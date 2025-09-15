@@ -4,9 +4,8 @@ import zipfile
 from datetime import datetime, timedelta
 import re
 import requests
-import base64
 from PIL import Image
-import json
+import replicate
 
 class SRTParser:
     """Handle SRT file parsing and subtitle extraction"""
@@ -137,8 +136,8 @@ class PromptEnhancer:
         # Build style components
         style_prompt = PromptEnhancer._build_style_prompt(style_settings)
         
-        # Combine everything
-        final_prompt = f"{enhanced_text}, {style_prompt}, high quality, detailed, professional, sharp focus, good lighting"
+        # Combine everything with Flux-optimized modifiers
+        final_prompt = f"{enhanced_text}, {style_prompt}, high quality, detailed, professional photography, sharp focus, good lighting, masterpiece"
         
         # Ensure prompt length is optimal for Flux
         final_prompt = PromptEnhancer._optimize_prompt_length(final_prompt)
@@ -162,12 +161,14 @@ class PromptEnhancer:
         """Add visual context based on text content"""
         visual_enhancements = {
             # Actions
-            'walk': 'person walking',
-            'run': 'person running dynamically',
-            'fight': 'intense action scene',
+            'walk': 'person walking elegantly',
+            'run': 'dynamic running scene',
+            'fight': 'intense action sequence',
             'dance': 'graceful dancing movement',
             'talk': 'people in conversation',
             'shout': 'dramatic emotional expression',
+            'smile': 'warm genuine smile',
+            'cry': 'emotional tears',
             
             # Emotions
             'happy': 'joyful expression, bright atmosphere',
@@ -175,21 +176,25 @@ class PromptEnhancer:
             'angry': 'intense expression, dramatic lighting',
             'scared': 'fearful expression, dark atmosphere',
             'excited': 'energetic expression, vibrant scene',
+            'surprised': 'shocked expression, wide eyes',
             
             # Settings
-            'house': 'residential interior or exterior',
-            'car': 'automotive scene',
-            'office': 'professional workplace environment',
-            'park': 'outdoor natural setting',
-            'restaurant': 'dining establishment interior',
-            'school': 'educational facility',
-            'hospital': 'medical facility interior',
+            'house': 'beautiful residential setting',
+            'car': 'automotive scene with sleek vehicle',
+            'office': 'modern professional workspace',
+            'park': 'lush natural outdoor setting',
+            'restaurant': 'elegant dining establishment',
+            'school': 'educational facility interior',
+            'hospital': 'clean medical facility',
+            'street': 'urban street scene',
+            'beach': 'scenic coastal location',
+            'forest': 'mystical woodland setting',
             
             # Time of day
-            'morning': 'bright morning light, golden hour',
-            'night': 'evening atmosphere, artificial lighting',
-            'sunset': 'warm sunset lighting, golden hour',
-            'dawn': 'early morning light, soft atmosphere'
+            'morning': 'golden morning light, sunrise atmosphere',
+            'night': 'moody evening scene, artificial lighting',
+            'sunset': 'warm golden hour lighting',
+            'dawn': 'early morning soft light'
         }
         
         enhanced = text
@@ -232,91 +237,72 @@ class PromptEnhancer:
         
         return prompt
 
-class FluxImageGenerator:
-    """Handle image generation using Flux Schnell API"""
+class FluxReplicateGenerator:
+    """Handle image generation using Flux Schnell via Replicate"""
     
-    def __init__(self, flux_api_url, api_key=None):
-        self.api_url = flux_api_url
-        self.api_key = api_key
-        self.headers = {}
-        
-        if api_key:
-            self.headers["Authorization"] = f"Bearer {api_key}"
-        
-        self.headers["Content-Type"] = "application/json"
+    def __init__(self, api_token):
+        self.api_token = api_token
+        # Set the Replicate API token
+        replicate.api_token = api_token
     
-    def generate_scene_image(self, prompt, max_retries=3):
-        """Generate image using Flux API"""
+    def generate_scene_image(self, prompt, image_settings, max_retries=3):
+        """Generate image using Flux Schnell via Replicate"""
         for attempt in range(max_retries):
             try:
-                # Prepare payload for Flux
-                payload = {
+                # Prepare input for Flux Schnell
+                input_params = {
                     "prompt": prompt,
-                    "width": 1024,
-                    "height": 1024,
-                    "steps": 4,  # Flux Schnell uses 4 steps
-                    "guidance": 3.5,
-                    "seed": -1,  # Random seed
-                    "sampler": "euler"
+                    "go_fast": True,
+                    "megapixels": image_settings.get('megapixels', '1'),
+                    "num_outputs": 1,
+                    "aspect_ratio": image_settings.get('aspect_ratio', '1:1'),
+                    "output_format": image_settings.get('output_format', 'webp'),
+                    "output_quality": image_settings.get('output_quality', 90),
+                    "num_inference_steps": image_settings.get('num_inference_steps', 4)
                 }
                 
-                # Make API request
-                response = requests.post(
-                    self.api_url,
-                    headers=self.headers,
-                    json=payload,
-                    timeout=120
+                # Generate image using Replicate
+                output = replicate.run(
+                    "black-forest-labs/flux-schnell",
+                    input=input_params
                 )
                 
-                if response.status_code == 200:
-                    # Handle different response formats
-                    try:
-                        result = response.json()
-                        if 'image' in result:
-                            # Base64 encoded image
-                            image_data = base64.b64decode(result['image'])
-                            return image_data
-                        elif 'images' in result and result['images']:
-                            # Array of base64 images
-                            image_data = base64.b64decode(result['images'][0])
-                            return image_data
-                    except json.JSONDecodeError:
-                        # Direct binary response
-                        if response.headers.get('content-type', '').startswith('image/'):
-                            return response.content
+                # Download the generated image
+                if output and len(output) > 0:
+                    image_url = output[0]
+                    response = requests.get(image_url, timeout=60)
+                    
+                    if response.status_code == 200:
+                        return response.content
+                    else:
+                        st.error(f"Failed to download image: HTTP {response.status_code}")
+                        return None
+                else:
+                    st.error("No output received from Flux Schnell")
+                    return None
                 
-                elif response.status_code == 503:
-                    # Service unavailable, retry
+            except Exception as e:
+                error_msg = str(e)
+                if "rate limit" in error_msg.lower():
                     if attempt < max_retries - 1:
-                        st.info(f"Service busy... Retrying in 15 seconds (attempt {attempt + 1}/{max_retries})")
+                        st.warning(f"Rate limit hit. Waiting 30 seconds before retry {attempt + 1}/{max_retries}...")
                         import time
-                        time.sleep(15)
+                        time.sleep(30)
                         continue
                     else:
-                        st.error("Service is currently unavailable. Please try again later.")
+                        st.error("Rate limit exceeded. Please try again later.")
                         return None
-                
-                else:
-                    error_msg = f"API error: {response.status_code}"
-                    try:
-                        error_detail = response.json()
-                        error_msg += f" - {error_detail.get('error', error_detail.get('message', 'Unknown error'))}"
-                    except:
-                        error_msg += f" - {response.text[:200]}"
-                    
-                    st.error(error_msg)
+                elif "authentication" in error_msg.lower():
+                    st.error("Authentication failed. Please check your Replicate API token.")
                     return None
-            
-            except requests.exceptions.Timeout:
-                st.error(f"Request timed out (attempt {attempt + 1}/{max_retries})")
-                if attempt < max_retries - 1:
-                    import time
-                    time.sleep(10)
-                    continue
-                return None
-            except Exception as e:
-                st.error(f"Image generation failed: {str(e)}")
-                return None
+                else:
+                    st.error(f"Image generation failed: {error_msg}")
+                    if attempt < max_retries - 1:
+                        st.info(f"Retrying... (attempt {attempt + 1}/{max_retries})")
+                        import time
+                        time.sleep(10)
+                        continue
+                    return None
         
         return None
 
@@ -327,36 +313,81 @@ class UIComponents:
     def setup_page():
         """Configure Streamlit page settings"""
         st.set_page_config(
-            page_title="SRT Scene Generator - Flux", 
+            page_title="SRT Scene Generator - Flux Schnell", 
             page_icon="🎬", 
             layout="wide"
         )
         
-        st.title("🎬 SRT Scene Generator with Flux")
-        st.markdown("Upload SRT files and generate high-quality images using Flux AI")
+        st.title("🎬 SRT Scene Generator with Flux Schnell")
+        st.markdown("Upload SRT files and generate high-quality images using Flux Schnell via Replicate")
     
     @staticmethod
-    def render_api_config():
-        """Render API configuration section"""
-        st.subheader("🔧 Flux API Configuration")
+    def check_api_token():
+        """Check and display API token status"""
+        st.subheader("🔑 Replicate API Configuration")
         
-        col1, col2 = st.columns(2)
+        if "REPLICATE_API_TOKEN" in st.secrets:
+            token = st.secrets["REPLICATE_API_TOKEN"]
+            st.success("✅ Replicate API token configured")
+            st.info(f"Token: `{token[:8]}...{token[-4:]}`")
+            return token
+        else:
+            st.error("❌ Replicate API token not found")
+            st.markdown("""
+            **Setup Instructions:**
+            
+            1. Get your API token from [Replicate](https://replicate.com/account)
+            2. Add to `.streamlit/secrets.toml`:
+            ```toml
+            REPLICATE_API_TOKEN = "r8_your_token_here"
+            ```
+            
+            3. For Streamlit Cloud, add the secret in your app settings.
+            """)
+            return None
+    
+    @staticmethod
+    def render_image_settings():
+        """Render image generation settings"""
+        st.subheader("🖼️ Image Settings")
+        
+        col1, col2, col3 = st.columns(3)
         
         with col1:
-            api_url = st.text_input(
-                "Flux API URL",
-                value="http://localhost:8000/generate",
-                help="URL to your Flux API endpoint"
-            )
+            megapixels = st.selectbox("📐 Resolution", [
+                "0.25", "1", "2"
+            ], index=1, format_func=lambda x: {
+                "0.25": "0.25 MP (512x512)",
+                "1": "1 MP (1024x1024)", 
+                "2": "2 MP (1448x1448)"
+            }[x])
         
         with col2:
-            api_key = st.text_input(
-                "API Key (optional)",
-                type="password",
-                help="API key if required by your endpoint"
-            )
+            aspect_ratio = st.selectbox("📏 Aspect Ratio", [
+                "1:1", "16:9", "9:16", "4:3", "3:4", "21:9"
+            ])
         
-        return api_url, api_key
+        with col3:
+            output_format = st.selectbox("💾 Format", [
+                "webp", "jpg", "png"
+            ])
+        
+        col4, col5 = st.columns(2)
+        
+        with col4:
+            output_quality = st.slider("🎨 Quality", 60, 100, 90)
+        
+        with col5:
+            num_inference_steps = st.slider("⚡ Speed vs Quality", 1, 8, 4, 
+                                           help="Lower = faster, Higher = better quality")
+        
+        return {
+            'megapixels': megapixels,
+            'aspect_ratio': aspect_ratio,
+            'output_format': output_format,
+            'output_quality': output_quality,
+            'num_inference_steps': num_inference_steps
+        }
     
     @staticmethod
     def render_style_controls():
@@ -368,7 +399,7 @@ class UIComponents:
         with col1:
             style = st.selectbox("📸 Photography Style", [
                 "cinematic photography",
-                "documentary style",
+                "documentary style", 
                 "portrait photography",
                 "landscape photography",
                 "street photography",
@@ -376,7 +407,9 @@ class UIComponents:
                 "natural lighting",
                 "dramatic lighting",
                 "film noir style",
-                "vintage photography"
+                "vintage photography",
+                "digital art",
+                "concept art"
             ])
         
         with col2:
@@ -420,7 +453,7 @@ class UIComponents:
             num_images = st.number_input(
                 "📸 Number of Images to Generate", 
                 min_value=1, 
-                max_value=20,
+                max_value=15,  # Reasonable limit for Replicate API
                 value=5,
                 help="How many scenes to extract and generate images for"
             )
@@ -472,11 +505,13 @@ class UIComponents:
                         st.download_button(
                             f"💾 Download Scene {i + 1}",
                             data=result['image_data'],
-                            file_name=f"flux_scene_{i + 1}_{result['start_time'].replace(':', '-').replace(',', '-')}.png",
-                            mime="image/png"
+                            file_name=f"flux_scene_{i + 1}_{result['start_time'].replace(':', '-').replace(',', '-')}.webp",
+                            mime="image/webp"
                         )
-                    
-                    st.metric("File Size", f"{len(result['image_data']) / 1024:.1f} KB" if result['image_data'] else "Failed")
+                        
+                        # Show file size
+                        file_size_kb = len(result['image_data']) / 1024
+                        st.metric("File Size", f"{file_size_kb:.1f} KB")
                 
                 with col2:
                     if result['image_data']:
@@ -484,13 +519,14 @@ class UIComponents:
                             image = Image.open(io.BytesIO(result['image_data']))
                             st.image(
                                 image, 
-                                caption=f"Generated at {result['start_time']} - {result['end_time']}",
+                                caption=f"Generated with Flux Schnell at {result['start_time']} - {result['end_time']}",
                                 use_column_width=True
                             )
                         except Exception as e:
                             st.error(f"Could not display image: {str(e)}")
                     else:
                         st.error("❌ Image generation failed for this scene")
+                        st.info("This might be due to content policy restrictions or API issues.")
                 
                 if result.get('enhanced_prompt'):
                     with st.expander(f"🔍 View Enhanced Prompt for Scene {i + 1}"):
@@ -506,7 +542,7 @@ class UIComponents:
         with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
             for i, result in enumerate(results):
                 if result['image_data']:
-                    filename = f"flux_scene_{i + 1}_{result['start_time'].replace(':', '-').replace(',', '-')}.png"
+                    filename = f"flux_scene_{i + 1}_{result['start_time'].replace(':', '-').replace(',', '-')}.webp"
                     zip_file.writestr(filename, result['image_data'])
                     
                     # Also add a text file with scene info
@@ -515,6 +551,7 @@ Time: {result['start_time']} → {result['end_time']}
 Duration: {result['duration']:.1f} seconds
 Subtitle: {result['text']}
 Enhanced Prompt: {result.get('enhanced_prompt', 'N/A')}
+Generated with: Flux Schnell via Replicate
 """
                     info_filename = f"scene_{i + 1}_info.txt"
                     zip_file.writestr(info_filename, info_content.encode('utf-8'))
@@ -526,15 +563,17 @@ def main():
     """Main application function"""
     UIComponents.setup_page()
     
-    # API Configuration
-    api_url, api_key = UIComponents.render_api_config()
+    # Check API token
+    api_token = UIComponents.check_api_token()
+    if not api_token:
+        st.stop()
     
     # File upload
     st.subheader("📁 Upload SRT File")
     uploaded_file = st.file_uploader(
         "Choose your SRT subtitle file", 
         type=['srt'],
-        help="Upload your subtitle file to generate scene images"
+        help="Upload your subtitle file to generate scene images with Flux Schnell"
     )
     
     if not uploaded_file:
@@ -554,20 +593,27 @@ Suddenly a dragon appears in the distance, breathing fire
 00:00:09,000 --> 00:00:12,000
 The epic battle begins with magical spells flying everywhere""")
         
-        with st.expander("🚀 API Setup Instructions"):
+        with st.expander("💡 About Flux Schnell"):
             st.markdown("""
-            **Local Setup (Recommended):**
-            1. Install ComfyUI or Automatic1111 with Flux Schnell
-            2. Set up API endpoint (default: http://localhost:8000/generate)
-            3. Configure the API URL above
+            **Flux Schnell** is Black Forest Labs' ultra-fast image generation model:
             
-            **Cloud Services:**
-            - RunPod, Vast.ai, or similar GPU cloud providers
-            - Replicate API with Flux models
-            - Custom Flux deployment
+            ✨ **Features:**
+            - **4-step generation** for lightning-fast results
+            - **High-quality outputs** with photorealistic detail
+            - **Multiple aspect ratios** and resolutions
+            - **Content-aware generation** perfect for scene visualization
             
-            **API Response Format:**
-            Your API should return JSON with 'image' field containing base64 encoded image data.
+            🚀 **Powered by Replicate:**
+            - Reliable cloud infrastructure
+            - No local GPU required
+            - Pay-per-use pricing
+            - Built-in content moderation
+            
+            📊 **Perfect for:**
+            - Video storyboarding
+            - Scene visualization
+            - Content creation
+            - Educational materials
             """)
         return
     
@@ -594,23 +640,14 @@ The epic battle begins with magical spells flying everywhere""")
         st.error(f"❌ Failed to parse SRT file: {str(e)}")
         return
     
-    # Configuration
+    # Configuration sections
+    image_settings = UIComponents.render_image_settings()
     style_settings = UIComponents.render_style_controls()
     num_images, selection_method = UIComponents.render_scene_selection()
     
     # Generate images
-    if st.button("🎨 Generate Scene Images with Flux", type="primary"):
-        # Validate API configuration
-        if not api_url:
-            st.error("⚠️ Flux API URL is not configured. Please check your secrets.toml file.")
-            st.code("""
-# Add to .streamlit/secrets.toml:
-FLUX_API_URL = "http://localhost:8000/generate"
-FLUX_API_KEY = "your-api-key"  # optional
-            """)
-            return
-        
-        with st.spinner("🔄 Analyzing scenes and generating images..."):
+    if st.button("🎨 Generate Scene Images with Flux Schnell", type="primary"):
+        with st.spinner("🔄 Analyzing scenes and generating images with Flux Schnell..."):
             try:
                 # Select key scenes
                 selected_scenes = SceneSelector.identify_key_scenes(
@@ -625,7 +662,7 @@ FLUX_API_KEY = "your-api-key"  # optional
                 
                 # Initialize components
                 enhancer = PromptEnhancer()
-                generator = FluxImageGenerator(api_url, api_key)
+                generator = FluxReplicateGenerator(api_token)
                 
                 # Generate images
                 results = []
@@ -636,7 +673,7 @@ FLUX_API_KEY = "your-api-key"  # optional
                     # Update progress
                     progress = (i + 1) / len(selected_scenes)
                     progress_bar.progress(progress)
-                    status_placeholder.write(f"🎬 Processing scene {i + 1}/{len(selected_scenes)}: `{scene['start_time']}`")
+                    status_placeholder.write(f"🎬 Generating scene {i + 1}/{len(selected_scenes)}: `{scene['start_time']}`")
                     
                     # Enhance prompt
                     enhanced_prompt = enhancer.enhance_scene_prompt(
@@ -644,7 +681,7 @@ FLUX_API_KEY = "your-api-key"  # optional
                     )
                     
                     # Generate image
-                    image_data = generator.generate_scene_image(enhanced_prompt)
+                    image_data = generator.generate_scene_image(enhanced_prompt, image_settings)
                     
                     # Store result
                     results.append({
@@ -660,8 +697,11 @@ FLUX_API_KEY = "your-api-key"  # optional
                 successful = sum(1 for r in results if r['image_data'])
                 st.success(f"🎉 Generated {successful}/{len(results)} images successfully!")
                 
+                if successful < len(results):
+                    st.warning(f"⚠️ {len(results) - successful} images failed to generate (possibly due to content policy)")
+                
                 # Display results
-                st.subheader("🖼️ Generated Scenes")
+                st.subheader("🖼️ Generated Scenes with Flux Schnell")
                 UIComponents.display_results(results)
                 
             except Exception as e:
