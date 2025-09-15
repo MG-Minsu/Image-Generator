@@ -1,272 +1,423 @@
 import streamlit as st
-import base64
-import asyncio
-import aiohttp
 import io
 import zipfile
+from datetime import datetime, timedelta
+import re
 from PIL import Image
 import google.generativeai as genai
 
-# Configure Gemini
-genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+class SRTParser:
+    """Handle SRT file parsing and subtitle extraction"""
+    
+    @staticmethod
+    def parse_srt(srt_content):
+        """Parse SRT content into structured subtitle data"""
+        subtitles = []
+        blocks = srt_content.strip().split('\n\n')
+        
+        for block in blocks:
+            lines = block.strip().split('\n')
+            if len(lines) >= 3:
+                try:
+                    # Extract subtitle number
+                    subtitle_id = int(lines[0])
+                    
+                    # Extract time range
+                    time_line = lines[1]
+                    start_time, end_time = SRTParser._parse_time_range(time_line)
+                    
+                    # Extract text (can be multiple lines)
+                    text = '\n'.join(lines[2:])
+                    
+                    subtitles.append({
+                        'id': subtitle_id,
+                        'start_time': start_time,
+                        'end_time': end_time,
+                        'text': text,
+                        'duration': SRTParser._calculate_duration(start_time, end_time)
+                    })
+                except (ValueError, IndexError) as e:
+                    st.warning(f"Skipped malformed subtitle block: {block[:50]}...")
+                    continue
+        
+        return subtitles
+    
+    @staticmethod
+    def _parse_time_range(time_line):
+        """Parse SRT time format: 00:00:20,000 --> 00:00:24,400"""
+        pattern = r'(\d{2}:\d{2}:\d{2},\d{3}) --> (\d{2}:\d{2}:\d{2},\d{3})'
+        match = re.match(pattern, time_line)
+        if not match:
+            raise ValueError(f"Invalid time format: {time_line}")
+        
+        start_str, end_str = match.groups()
+        return start_str, end_str
+    
+    @staticmethod
+    def _calculate_duration(start_time, end_time):
+        """Calculate duration between two SRT timestamps"""
+        def time_to_seconds(time_str):
+            h, m, s_ms = time_str.split(':')
+            s, ms = s_ms.split(',')
+            return int(h) * 3600 + int(m) * 60 + int(s) + int(ms) / 1000
+        
+        start_seconds = time_to_seconds(start_time)
+        end_seconds = time_to_seconds(end_time)
+        return end_seconds - start_seconds
 
-# --- Prompt Builder ---
-def create_visual_prompt(story_text, style_choice, mood_setting, art_styles, color_palette):
-    color_desc = ", ".join(color_palette).lower() + " color scheme" if color_palette else ""
-    return f"{story_text}, {art_styles[style_choice]}, {mood_setting}, {color_desc}, masterpiece quality"
+class SceneSelector:
+    """Handle scene selection logic for image generation"""
+    
+    @staticmethod
+    def identify_key_scenes(subtitles, num_images, selection_method="even_distribution"):
+        """Identify key scenes from subtitles for image generation"""
+        if not subtitles:
+            return []
+        
+        if selection_method == "even_distribution":
+            return SceneSelector._even_distribution(subtitles, num_images)
+        elif selection_method == "longest_duration":
+            return SceneSelector._longest_duration(subtitles, num_images)
+        elif selection_method == "keyword_based":
+            return SceneSelector._keyword_based(subtitles, num_images)
+        else:
+            return SceneSelector._even_distribution(subtitles, num_images)
+    
+    @staticmethod
+    def _even_distribution(subtitles, num_images):
+        """Select scenes evenly distributed across the video timeline"""
+        if num_images >= len(subtitles):
+            return subtitles
+        
+        step = len(subtitles) / num_images
+        selected_indices = [int(i * step) for i in range(num_images)]
+        return [subtitles[i] for i in selected_indices]
+    
+    @staticmethod
+    def _longest_duration(subtitles, num_images):
+        """Select scenes with the longest duration"""
+        sorted_subtitles = sorted(subtitles, key=lambda x: x['duration'], reverse=True)
+        return sorted_subtitles[:num_images]
+    
+    @staticmethod
+    def _keyword_based(subtitles, num_images):
+        """Select scenes containing visual keywords"""
+        visual_keywords = [
+            'look', 'see', 'watch', 'show', 'appear', 'scene', 'view',
+            'action', 'move', 'walk', 'run', 'jump', 'dance', 'fight',
+            'beautiful', 'amazing', 'stunning', 'dramatic', 'exciting'
+        ]
+        
+        scored_subtitles = []
+        for subtitle in subtitles:
+            score = sum(1 for keyword in visual_keywords 
+                       if keyword.lower() in subtitle['text'].lower())
+            scored_subtitles.append((subtitle, score))
+        
+        # Sort by score, then by duration
+        scored_subtitles.sort(key=lambda x: (x[1], x[0]['duration']), reverse=True)
+        return [item[0] for item in scored_subtitles[:num_images]]
 
-def generate_enhanced_scene_prompt(scene_text, style_choice, mood_setting, art_styles, color_palette):
-    """Use Gemini to enhance scene descriptions for better image generation"""
-    try:
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        
-        # Create base visual prompt
-        base_prompt = create_visual_prompt(scene_text, style_choice, mood_setting, art_styles, color_palette)
-        
-        enhancement_prompt = f"""
-        Transform this story scene into a detailed visual description perfect for image generation:
-        
-        Scene: {base_prompt}
-        
-        Create a vivid, detailed description that includes:
-        - Main characters and their expressions
-        - Setting and environment details
-        - Lighting and atmosphere
-        - Visual composition
-        - Specific artistic elements
-        
-        Keep it concise but visually rich, suitable for children's book illustration style.
-        Format as a single paragraph description perfect for the Imagen AI model.
-        """
-        
-        response = model.generate_content(enhancement_prompt)
-        return response.text.strip()
-    except Exception as e:
-        st.warning(f"Scene enhancement failed: {str(e)}")
-        return create_visual_prompt(scene_text, style_choice, mood_setting, art_styles, color_palette)
-
-async def generate_story_images(story_text, num_images, style_choice, mood_setting, art_styles, color_palette):
-    """Generate images using Google's Imagen 4.0 model"""
+class ImageGenerator:
+    """Handle AI image generation using Gemini and Imagen"""
     
-    # Split story into scenes
-    story_lines = story_text.split("\n\n")
+    def __init__(self, api_key):
+        genai.configure(api_key=api_key)
+        self.gemini_model = genai.GenerativeModel('gemini-1.5-flash')
+        self.imagen_model = genai.GenerativeModel('imagen-4.0-generate-001')
     
-    # If we have fewer paragraphs than requested images, duplicate content
-    if len(story_lines) < num_images:
-        scenes = story_lines * (num_images // len(story_lines) + 1)
-        scenes = scenes[:num_images]
-    else:
-        scenes = story_lines[:num_images]
-    
-    images = []
-    
-    for i, scene in enumerate(scenes):
+    def enhance_scene_prompt(self, subtitle_text, style_settings):
+        """Use Gemini to create detailed visual prompts from subtitle text"""
         try:
-            # Enhance the scene prompt using Gemini
-            enhanced_prompt = generate_enhanced_scene_prompt(
-                scene.strip(), style_choice, mood_setting, art_styles, color_palette
-            )
+            enhancement_prompt = f"""
+            Convert this subtitle/dialogue into a detailed visual scene description for image generation:
             
-            # Display the enhanced prompt to user
-            st.write(f"**Scene {i+1} Enhanced Prompt:** {enhanced_prompt}")
+            Text: "{subtitle_text}"
             
-            # Generate image using Imagen 4.0
-            imagen_model = genai.GenerativeModel('imagen-4.0-generate-001')
+            Create a vivid visual description that includes:
+            - Characters and their expressions/actions
+            - Setting and environment details
+            - Lighting and mood
+            - Visual composition and camera angle
+            - Specific artistic elements
             
-            response = imagen_model.generate_content([enhanced_prompt])
+            Style: {style_settings['style']}
+            Mood: {style_settings['mood']}
+            Colors: {', '.join(style_settings['colors'])}
             
-            # Extract image data
+            Format as a single detailed paragraph suitable for AI image generation.
+            Focus on visual elements that would make a compelling scene.
+            """
+            
+            response = self.gemini_model.generate_content(enhancement_prompt)
+            return response.text.strip()
+        
+        except Exception as e:
+            st.error(f"Failed to enhance prompt: {str(e)}")
+            return f"{subtitle_text}, {style_settings['style']}, {style_settings['mood']}"
+    
+    def generate_scene_image(self, enhanced_prompt):
+        """Generate image using Imagen 4.0"""
+        try:
+            response = self.imagen_model.generate_content([enhanced_prompt])
+            
             if response.parts and len(response.parts) > 0:
                 image_part = response.parts[0]
                 if hasattr(image_part, 'data'):
-                    image_data = image_part.data
-                    images.append(image_data)
-                else:
-                    st.error(f"No image data received for scene {i+1}")
-            else:
-                st.error(f"No response parts received for scene {i+1}")
-                
+                    return image_part.data
+            
+            return None
+        
         except Exception as e:
-            st.error(f"Error generating image {i+1}: {str(e)}")
-            continue
-    
-    return images
+            st.error(f"Image generation failed: {str(e)}")
+            return None
 
-def download_image_button(image_data, filename, label):
-    """Create a download button for image data"""
-    st.download_button(
-        label=label,
-        data=image_data,
-        file_name=filename,
-        mime="image/png"
-    )
-
-def create_zip_file(images):
-    """Create a ZIP file containing all images"""
-    zip_buffer = io.BytesIO()
+class UIComponents:
+    """Handle Streamlit UI components and layout"""
     
-    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-        for idx, image_data in enumerate(images):
-            filename = f"story_image_{idx + 1}.png"
-            zip_file.writestr(filename, image_data)
-    
-    zip_buffer.seek(0)
-    return zip_buffer.getvalue()
-
-def download_all_images_button(images):
-    """Create a download button for all images as a ZIP file"""
-    if images:
-        zip_data = create_zip_file(images)
-        st.download_button(
-            label="📦 Download All Pictures (ZIP)",
-            data=zip_data,
-            file_name="story_images.zip",
-            mime="application/zip"
-        )
-
-# --- Main App ---
-def setup_dreamcanvas_app():
-    st.set_page_config(page_title="DreamCanvas - Imagen 4.0", page_icon="🎨", layout="wide")
-    st.title("🎨 DreamCanvas — AI Image Generation with Imagen 4.0")
-    st.write("Transform your stories into beautiful images using Google's Imagen 4.0 and Gemini AI")
-    
-    # Example styles
-    art_styles = {
-        "Dreamscape": "ethereal, soft lighting, pastel colors, surreal atmosphere",
-        "Comic Book": "bold outlines, vibrant colors, dynamic poses, speech bubbles",
-        "Fantasy Art": "magical elements, rich colors, detailed textures, epic scale",
-        "Watercolor": "soft brushstrokes, flowing colors, artistic texture",
-        "Cartoon": "simple shapes, bright colors, playful style",
-        "Realistic": "photorealistic, detailed textures, natural lighting",
-        "Anime": "anime style, expressive eyes, dynamic poses, vibrant colors",
-        "Children's Book": "friendly children's book illustration, warm colors, inviting characters"
-    }
-    
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
-        user_story = st.text_area(
-            "📝 Write your story", 
-            placeholder="Once upon a time, in a magical forest, a little fox discovered a glowing crystal...\n\nThe fox touched the crystal and suddenly could understand all the forest animals...\n\nTogether, they embarked on an adventure to save their home from an evil wizard...",
-            height=300,
-            help="Write your story with each paragraph as a separate scene. Each paragraph will become one image."
-        )
-    
-    with col2:
-        chosen_style = st.selectbox("🎨 Visual Style:", list(art_styles.keys()), index=7)  # Default to Children's Book
-        
-        mood_slider = st.select_slider("🌟 Mood:", options=[
-            "Dark & Mysterious", 
-            "Calm & Peaceful", 
-            "Bright & Energetic", 
-            "Epic & Dramatic"
-        ], value="Bright & Energetic")
-        
-        color_palette = st.multiselect(
-            "🎨 Colors:", 
-            ["Blues", "Reds", "Purples", "Golds", "Greens", "Oranges", "Pinks", "Silvers"], 
-            default=["Blues", "Golds"]
+    @staticmethod
+    def setup_page():
+        """Configure Streamlit page settings"""
+        st.set_page_config(
+            page_title="SRT Scene Generator", 
+            page_icon="🎬", 
+            layout="wide"
         )
         
-        num_images = st.number_input(
-            "📸 How many images?", 
-            min_value=1, 
-            max_value=10,
-            value=3, 
-            step=1,
-            help="Number of scenes/images to generate"
-        )
+        st.title("🎬 SRT Scene Generator")
+        st.markdown("Upload SRT files and generate images for key video scenes")
     
-    if st.button("✨ Generate Images with Imagen 4.0", type="primary"):
-        if user_story.strip():
-            with st.spinner(f"🎨 Generating {num_images} images with Imagen 4.0..."):
-                try:
-                    # Generate images using Imagen 4.0
-                    images = asyncio.run(generate_story_images(
-                        user_story, num_images, chosen_style, mood_slider, art_styles, color_palette
-                    ))
+    @staticmethod
+    def render_style_controls():
+        """Render style configuration controls"""
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            style = st.selectbox("🎨 Visual Style", [
+                "Cinematic", "Documentary", "Anime", "Cartoon", 
+                "Realistic", "Artistic", "Comic Book", "Fantasy"
+            ])
+        
+        with col2:
+            mood = st.selectbox("🌟 Mood", [
+                "Dramatic", "Peaceful", "Energetic", "Dark", 
+                "Bright", "Mysterious", "Epic", "Intimate"
+            ])
+        
+        with col3:
+            colors = st.multiselect("🎨 Color Palette", [
+                "Warm tones", "Cool tones", "Vibrant", "Muted", 
+                "Monochrome", "Pastel", "High contrast", "Natural"
+            ], default=["Natural"])
+        
+        return {"style": style, "mood": mood, "colors": colors}
+    
+    @staticmethod
+    def render_scene_selection():
+        """Render scene selection controls"""
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            num_images = st.number_input(
+                "📸 Number of Images", 
+                min_value=1, 
+                max_value=20, 
+                value=5
+            )
+        
+        with col2:
+            method = st.selectbox("📋 Scene Selection Method", [
+                "even_distribution",
+                "longest_duration", 
+                "keyword_based"
+            ], format_func=lambda x: {
+                "even_distribution": "Even Distribution",
+                "longest_duration": "Longest Scenes",
+                "keyword_based": "Keyword Based"
+            }[x])
+        
+        return num_images, method
+    
+    @staticmethod
+    def display_results(results):
+        """Display generated images with timing information"""
+        if not results:
+            st.warning("No images were generated.")
+            return
+        
+        # Download all button
+        if len(results) > 1:
+            zip_data = UIComponents._create_zip(results)
+            st.download_button(
+                "📦 Download All Images",
+                data=zip_data,
+                file_name="scene_images.zip",
+                mime="application/zip"
+            )
+        
+        st.divider()
+        
+        # Display individual results
+        for i, result in enumerate(results):
+            with st.container():
+                col1, col2 = st.columns([1, 2])
+                
+                with col1:
+                    st.subheader(f"Scene {i + 1}")
+                    st.write(f"**Time:** {result['start_time']} → {result['end_time']}")
+                    st.write(f"**Duration:** {result['duration']:.1f}s")
+                    st.write(f"**Text:** {result['text'][:100]}...")
                     
-                    if images:
-                        st.success(f"✅ Generated {len(images)} images!")
-                        
-                        # Add "Download All Pictures" button at the top
-                        download_all_images_button(images)
-                        st.divider()
-                        
-                        # Display images in columns
-                        cols = st.columns(min(len(images), 3))
-                        
-                        for img_idx, image_data in enumerate(images):
-                            col_idx = img_idx % len(cols)
-                            
-                            with cols[col_idx]:
-                                # Convert bytes to PIL Image for display
-                                try:
-                                    image = Image.open(io.BytesIO(image_data))
-                                    st.image(image, caption=f"Story Scene {img_idx + 1}")
-                                    
-                                    # Download button
-                                    download_image_button(
-                                        image_data,
-                                        f"story_image_{img_idx + 1}.png",
-                                        f"💾 Download Image {img_idx + 1}"
-                                    )
-                                except Exception as e:
-                                    st.error(f"Error displaying image {img_idx + 1}: {str(e)}")
-                        
+                    if result['image_data']:
+                        st.download_button(
+                            f"💾 Download Scene {i + 1}",
+                            data=result['image_data'],
+                            file_name=f"scene_{i + 1}_{result['start_time'].replace(':', '-')}.png",
+                            mime="image/png"
+                        )
+                
+                with col2:
+                    if result['image_data']:
+                        try:
+                            image = Image.open(io.BytesIO(result['image_data']))
+                            st.image(image, caption=f"Generated scene at {result['start_time']}")
+                        except Exception as e:
+                            st.error(f"Could not display image: {str(e)}")
                     else:
-                        st.error("Failed to generate any images. Please try again.")
-                        
-                except Exception as e:
-                    st.error(f"An error occurred: {str(e)}")
-                    st.info("Make sure you have access to the Imagen 4.0 model and your API key is properly configured.")
-        else:
-            st.warning("📝 Please write a story first!")
+                        st.error("Image generation failed for this scene")
+                
+                if result.get('enhanced_prompt'):
+                    with st.expander(f"View Enhanced Prompt for Scene {i + 1}"):
+                        st.write(result['enhanced_prompt'])
+                
+                st.divider()
     
-    # Instructions section
-    with st.expander("📖 How to Use DreamCanvas"):
-        st.write("""
-        **Step 1:** Write your story in the text area, with each paragraph representing a different scene.
+    @staticmethod
+    def _create_zip(results):
+        """Create ZIP file with all generated images"""
+        zip_buffer = io.BytesIO()
         
-        **Step 2:** Choose your visual style, mood, and color preferences.
+        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+            for i, result in enumerate(results):
+                if result['image_data']:
+                    filename = f"scene_{i + 1}_{result['start_time'].replace(':', '-')}.png"
+                    zip_file.writestr(filename, result['image_data'])
         
-        **Step 3:** Set how many images you want to generate.
-        
-        **Step 4:** Click "Generate Images with Imagen 4.0" to create your illustrations.
-        
-        **Step 5:** Download individual images or all images as a ZIP file.
-        
-        **Tips for better results:**
-        - Write clear, descriptive scenes
-        - Each paragraph should describe one specific moment
-        - Include character descriptions and emotions
-        - Describe the setting and atmosphere
-        - Be specific about visual details you want to see
-        """)
+        zip_buffer.seek(0)
+        return zip_buffer.getvalue()
+
+def main():
+    """Main application function"""
+    UIComponents.setup_page()
     
-    # Technical info
-    with st.expander("🔧 Technical Information"):
-        st.write("""
-        **Powered by:**
-        - **Imagen 4.0**: Google's latest image generation model for high-quality, creative images
-        - **Gemini 1.5 Flash**: For enhancing story prompts with detailed visual descriptions
+    # Check API key
+    if "GEMINI_API_KEY" not in st.secrets:
+        st.error("Please configure GEMINI_API_KEY in Streamlit secrets")
+        st.info("Get your API key from: https://makersuite.google.com/app/apikey")
+        return
+    
+    # File upload
+    uploaded_file = st.file_uploader(
+        "📁 Upload SRT File", 
+        type=['srt'],
+        help="Upload your subtitle file to generate scene images"
+    )
+    
+    if not uploaded_file:
+        st.info("👆 Upload an SRT file to get started")
+        return
+    
+    # Parse SRT file
+    try:
+        srt_content = uploaded_file.read().decode('utf-8')
+        subtitles = SRTParser.parse_srt(srt_content)
         
-        **Requirements:**
-        - Google AI API key with access to Imagen 4.0 model
-        - Gemini API access for prompt enhancement
+        if not subtitles:
+            st.error("No valid subtitles found in the uploaded file")
+            return
         
-        **Features:**
-        - AI-enhanced prompts for better image quality
-        - Multiple art styles and mood options
-        - Batch image generation and download
-        - High-quality outputs suitable for children's books
+        st.success(f"✅ Parsed {len(subtitles)} subtitles")
+        
+    except Exception as e:
+        st.error(f"Failed to parse SRT file: {str(e)}")
+        return
+    
+    # Configuration controls
+    st.subheader("⚙️ Configuration")
+    style_settings = UIComponents.render_style_controls()
+    num_images, selection_method = UIComponents.render_scene_selection()
+    
+    # Generate images
+    if st.button("🎨 Generate Scene Images", type="primary"):
+        with st.spinner("Generating images..."):
+            try:
+                # Select key scenes
+                selected_scenes = SceneSelector.identify_key_scenes(
+                    subtitles, num_images, selection_method
+                )
+                
+                if not selected_scenes:
+                    st.error("No scenes selected for image generation")
+                    return
+                
+                st.info(f"Selected {len(selected_scenes)} scenes for image generation")
+                
+                # Initialize image generator
+                generator = ImageGenerator(st.secrets["GEMINI_API_KEY"])
+                
+                # Generate images for each scene
+                results = []
+                progress_bar = st.progress(0)
+                
+                for i, scene in enumerate(selected_scenes):
+                    # Update progress
+                    progress_bar.progress((i + 1) / len(selected_scenes))
+                    
+                    # Enhance prompt
+                    enhanced_prompt = generator.enhance_scene_prompt(
+                        scene['text'], style_settings
+                    )
+                    
+                    # Generate image
+                    image_data = generator.generate_scene_image(enhanced_prompt)
+                    
+                    # Store result
+                    results.append({
+                        **scene,
+                        'enhanced_prompt': enhanced_prompt,
+                        'image_data': image_data
+                    })
+                
+                progress_bar.empty()
+                
+                # Display results
+                st.subheader("🖼️ Generated Scenes")
+                UIComponents.display_results(results)
+                
+            except Exception as e:
+                st.error(f"An error occurred: {str(e)}")
+    
+    # Instructions
+    with st.expander("📖 How to Use"):
+        st.markdown("""
+        **Step 1:** Upload your SRT (subtitle) file
+        
+        **Step 2:** Configure visual style, mood, and colors
+        
+        **Step 3:** Choose number of images and scene selection method:
+        - **Even Distribution**: Spreads scenes evenly across the timeline
+        - **Longest Scenes**: Selects scenes with the most dialogue
+        - **Keyword Based**: Prioritizes scenes with visual keywords
+        
+        **Step 4:** Click "Generate Scene Images" to create visuals
+        
+        **Step 5:** View results with timestamps and download individual or all images
+        
+        **Tips:**
+        - Better SRT files with descriptive text produce better images
+        - Use "Keyword Based" selection for more visually interesting scenes
+        - Generated images include exact timestamps for video editing
         """)
 
 if __name__ == "__main__":
-    # Check if Gemini API key is configured
-    try:
-        setup_dreamcanvas_app()
-    except Exception as e:
-        st.error("Please configure your GEMINI_API_KEY in Streamlit secrets")
-        st.info("Get your API key from: https://makersuite.google.com/app/apikey")
-        st.stop()
+    main()
