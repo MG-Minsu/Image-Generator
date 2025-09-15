@@ -5,29 +5,34 @@ import re
 import requests
 from PIL import Image
 import replicate
+import os
 
-def parse_srt(srt_content):
-    """Parse SRT content into subtitle data"""
+# Initialize Replicate API
+if "REPLICATE_API_TOKEN" in st.secrets:
+    replicate.api_token = st.secrets["REPLICATE_API_TOKEN"]
+    os.environ["REPLICATE_API_TOKEN"] = st.secrets["REPLICATE_API_TOKEN"]
+
+def parse_srt_file(content):
+    """Parse SRT file and extract subtitle blocks"""
+    blocks = content.strip().split('\n\n')
     subtitles = []
-    blocks = srt_content.strip().split('\n\n')
     
     for block in blocks:
         lines = block.strip().split('\n')
         if len(lines) >= 3:
             try:
-                subtitle_id = int(lines[0])
-                time_line = lines[1]
-                text = '\n'.join(lines[2:])
+                # Extract subtitle info
+                number = int(lines[0])
+                time_range = lines[1]
+                text = ' '.join(lines[2:]).strip()
                 
-                # Parse time range: 00:00:20,000 --> 00:00:24,400
-                times = time_line.split(' --> ')
-                start_time = times[0]
-                end_time = times[1]
+                # Parse timestamps
+                start, end = time_range.split(' --> ')
                 
                 subtitles.append({
-                    'id': subtitle_id,
-                    'start_time': start_time,
-                    'end_time': end_time,
+                    'number': number,
+                    'start': start.strip(),
+                    'end': end.strip(), 
                     'text': text
                 })
             except:
@@ -35,53 +40,62 @@ def parse_srt(srt_content):
     
     return subtitles
 
-def select_scenes(subtitles, num_images, method="even"):
-    """Select key scenes for image generation"""
-    if not subtitles or num_images <= 0:
+def group_subtitles_into_scenes(subtitles, num_scenes):
+    """Group subtitles into the specified number of scenes"""
+    if not subtitles or num_scenes <= 0:
         return []
     
-    if method == "even":
-        # Even distribution across timeline
-        if num_images >= len(subtitles):
-            return subtitles
-        step = len(subtitles) / num_images
-        indices = [int(i * step) for i in range(num_images)]
-        return [subtitles[i] for i in indices]
+    total_subs = len(subtitles)
+    subs_per_scene = max(1, total_subs // num_scenes)
     
-    elif method == "longest":
-        # Select longest scenes (assuming longer = more content)
-        return subtitles[:num_images]
+    scenes = []
+    for i in range(num_scenes):
+        start_idx = i * subs_per_scene
+        
+        # For the last scene, include all remaining subtitles
+        if i == num_scenes - 1:
+            end_idx = total_subs
+        else:
+            end_idx = min(start_idx + subs_per_scene, total_subs)
+        
+        if start_idx < total_subs:
+            scene_subs = subtitles[start_idx:end_idx]
+            
+            # Combine all text from this scene group
+            combined_text = ' '.join([sub['text'] for sub in scene_subs])
+            
+            scenes.append({
+                'scene_number': i + 1,
+                'start_time': scene_subs[0]['start'],
+                'end_time': scene_subs[-1]['end'],
+                'text': combined_text,
+                'subtitle_count': len(scene_subs)
+            })
     
-    elif method == "keywords":
-        # Select scenes with visual keywords
-        keywords = ['look', 'see', 'show', 'appear', 'walk', 'run', 'fight', 'beautiful', 'dramatic']
-        scored = []
-        for sub in subtitles:
-            score = sum(1 for word in keywords if word.lower() in sub['text'].lower())
-            scored.append((sub, score))
-        scored.sort(key=lambda x: x[1], reverse=True)
-        return [item[0] for item in scored[:num_images]]
-    
-    return subtitles[:num_images]
+    return scenes
 
-def enhance_prompt(text, style="cinematic"):
-    """Create better prompts from subtitle text"""
-    # Clean subtitle text
-    clean_text = re.sub(r'\[.*?\]|\(.*?\)|<.*?>', '', text).strip()
+def create_image_prompt(scene_text, style="cinematic"):
+    """Create optimized prompt for image generation"""
+    # Clean the text
+    clean_text = re.sub(r'[^\w\s.,!?-]', '', scene_text)
+    clean_text = ' '.join(clean_text.split())  # Remove extra spaces
     
-    # Add style and quality modifiers
-    if style == "cinematic":
-        prompt = f"{clean_text}, cinematic photography, dramatic lighting, high quality, detailed"
-    elif style == "realistic":
-        prompt = f"{clean_text}, photorealistic, natural lighting, sharp focus, professional photography"
-    elif style == "artistic":
-        prompt = f"{clean_text}, digital art, concept art, detailed illustration, masterpiece"
-    else:
-        prompt = f"{clean_text}, {style}, high quality, detailed"
+    # Limit text length for better prompts
+    if len(clean_text) > 150:
+        clean_text = clean_text[:150] + "..."
     
-    return prompt
+    # Style-based prompt templates
+    style_templates = {
+        "cinematic": f"{clean_text}, cinematic scene, dramatic lighting, professional cinematography, high quality",
+        "realistic": f"{clean_text}, photorealistic, natural lighting, detailed, high resolution",
+        "artistic": f"{clean_text}, digital art, concept art, detailed illustration, vibrant colors",
+        "documentary": f"{clean_text}, documentary photography, natural moment, authentic, candid shot",
+        "dramatic": f"{clean_text}, dramatic scene, intense lighting, emotional atmosphere, high contrast"
+    }
+    
+    return style_templates.get(style, f"{clean_text}, {style}, high quality, detailed")
 
-def generate_image(prompt):
+def generate_flux_image(prompt):
     """Generate image using Flux Schnell"""
     try:
         output = replicate.run(
@@ -93,154 +107,250 @@ def generate_image(prompt):
                 "num_outputs": 1,
                 "aspect_ratio": "16:9",
                 "output_format": "webp",
-                "output_quality": 90,
+                "output_quality": 85,
                 "num_inference_steps": 4
             }
         )
         
-        # Download image
         if output and len(output) > 0:
-            response = requests.get(output[0], timeout=60)
+            image_url = output[0]
+            response = requests.get(image_url, timeout=60)
+            
             if response.status_code == 200:
                 return response.content
         
         return None
+        
     except Exception as e:
-        st.error(f"Generation failed: {str(e)}")
+        st.error(f"Image generation error: {str(e)}")
         return None
 
-def create_zip(results):
-    """Create ZIP file with all images"""
+def create_filename_from_timestamp(timestamp, scene_num):
+    """Create clean filename from SRT timestamp"""
+    # Convert 00:01:23,456 to 00-01-23-456
+    clean_time = timestamp.replace(':', '-').replace(',', '-')
+    return f"scene_{scene_num:02d}_{clean_time}.webp"
+
+def create_download_zip(scenes_data):
+    """Create ZIP file with all generated images"""
     zip_buffer = io.BytesIO()
-    with zipfile.ZipFile(zip_buffer, 'w') as zip_file:
-        for i, result in enumerate(results):
-            if result['image_data']:
-                filename = f"scene_{i+1}_{result['start_time'].replace(':', '-')}.webp"
-                zip_file.writestr(filename, result['image_data'])
+    
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+        for scene in scenes_data:
+            if scene['image_data']:
+                filename = create_filename_from_timestamp(scene['start_time'], scene['scene_number'])
+                zip_file.writestr(filename, scene['image_data'])
+                
+                # Add scene info text file
+                info_filename = f"scene_{scene['scene_number']:02d}_info.txt"
+                info_content = f"""Scene {scene['scene_number']}
+Start Time: {scene['start_time']}
+End Time: {scene['end_time']}
+Duration: {scene['start_time']} → {scene['end_time']}
+Subtitle Count: {scene['subtitle_count']}
+Text: {scene['text']}
+Prompt: {scene['prompt']}
+"""
+                zip_file.writestr(info_filename, info_content.encode('utf-8'))
+    
     zip_buffer.seek(0)
     return zip_buffer.getvalue()
 
 def main():
-    st.set_page_config(page_title="SRT Scene Generator", page_icon="🎬", layout="wide")
-    st.title("🎬 SRT Scene Generator with Flux")
+    st.set_page_config(
+        page_title="SRT Scene Generator", 
+        page_icon="🎬", 
+        layout="wide"
+    )
     
-    # API Token
-    if "REPLICATE_API_TOKEN" in st.secrets:
-        api_token = st.secrets["REPLICATE_API_TOKEN"]
-        st.success("✅ API token configured")
+    st.title("🎬 SRT Scene Generator")
+    st.markdown("Generate images from subtitle files using Flux AI")
+    
+    # Check API configuration
+    if "REPLICATE_API_TOKEN" not in st.secrets:
+        st.error("⚠️ Replicate API token not configured")
+        st.code('Add to secrets.toml: REPLICATE_API_TOKEN = "r8_your_token"')
+        st.stop()
     else:
-        api_token = st.text_input("Replicate API Token:", type="password")
-        if not api_token:
-            st.error("Please add REPLICATE_API_TOKEN to secrets or enter it above")
-            st.info("Get token from: https://replicate.com/account/api-tokens")
-            return
+        st.success("✅ Replicate API configured")
     
-    # File Upload
-    uploaded_file = st.file_uploader("Upload SRT File", type=['srt'])
+    # File upload
+    uploaded_file = st.file_uploader(
+        "📁 Upload SRT File", 
+        type=['srt'],
+        help="Upload your subtitle file to generate scene images"
+    )
+    
     if not uploaded_file:
-        st.info("Upload an SRT file to start")
+        st.info("👆 Upload an SRT file to begin")
+        
+        with st.expander("📝 SRT Format Example"):
+            st.code("""1
+00:00:01,000 --> 00:00:05,000
+A person walks through a beautiful forest
+
+2
+00:00:06,000 --> 00:00:10,000
+The sunlight filters through the green leaves
+
+3
+00:00:11,000 --> 00:00:15,000
+Birds are singing in the distance""")
         return
     
-    # Parse SRT
+    # Parse uploaded SRT file
     try:
         srt_content = uploaded_file.read().decode('utf-8')
-        subtitles = parse_srt(srt_content)
+        subtitles = parse_srt_file(srt_content)
+        
         if not subtitles:
-            st.error("No valid subtitles found")
+            st.error("❌ No valid subtitles found in file")
             return
-        st.success(f"Parsed {len(subtitles)} subtitles")
+            
+        st.success(f"✅ Loaded {len(subtitles)} subtitles successfully")
+        
     except Exception as e:
-        st.error(f"Failed to parse SRT: {str(e)}")
+        st.error(f"❌ Error reading SRT file: {str(e)}")
         return
     
-    # Settings
-    col1, col2, col3 = st.columns(3)
+    # Configuration options
+    st.subheader("⚙️ Generation Settings")
+    
+    col1, col2 = st.columns(2)
     
     with col1:
-        num_images = st.number_input("Number of images", 1, 10, 3)
+        num_scenes = st.slider(
+            "📸 Number of Images to Generate", 
+            min_value=1, 
+            max_value=min(20, len(subtitles)), 
+            value=min(5, len(subtitles)),
+            help="How many images to create from your SRT file"
+        )
     
     with col2:
-        method = st.selectbox("Selection method", [
-            ("even", "Even distribution"),
-            ("longest", "Longest scenes"), 
-            ("keywords", "Visual keywords")
-        ], format_func=lambda x: x[1])
+        style = st.selectbox(
+            "🎨 Visual Style",
+            ["cinematic", "realistic", "artistic", "documentary", "dramatic"],
+            help="Choose the style for generated images"
+        )
     
-    with col3:
-        style = st.selectbox("Style", [
-            "cinematic", "realistic", "artistic", "dramatic", "vintage"
-        ])
+    # Show how subtitles will be grouped
+    scenes = group_subtitles_into_scenes(subtitles, num_scenes)
     
-    # Generate Images
+    st.subheader("📋 Scene Preview")
+    st.info(f"Your {len(subtitles)} subtitles will be grouped into {len(scenes)} scenes")
+    
+    for scene in scenes:
+        with st.expander(f"Scene {scene['scene_number']}: {scene['start_time']} → {scene['end_time']}"):
+            st.write(f"**Timespan:** {scene['start_time']} to {scene['end_time']}")
+            st.write(f"**Includes:** {scene['subtitle_count']} subtitle(s)")
+            st.write(f"**Text:** {scene['text'][:200]}{'...' if len(scene['text']) > 200 else ''}")
+    
+    # Generate images
     if st.button("🎨 Generate Images", type="primary"):
-        # Select scenes
-        selected_scenes = select_scenes(subtitles, num_images, method[0])
-        if not selected_scenes:
-            st.error("No scenes selected")
+        if not scenes:
+            st.error("No scenes to generate")
             return
         
-        st.info(f"Generating {len(selected_scenes)} images...")
+        st.subheader("🔄 Generating Images...")
         
-        # Generate images
-        results = []
         progress_bar = st.progress(0)
+        status_text = st.empty()
         
-        for i, scene in enumerate(selected_scenes):
-            progress_bar.progress((i + 1) / len(selected_scenes))
+        generated_scenes = []
+        
+        for i, scene in enumerate(scenes):
+            # Update progress
+            progress = (i + 1) / len(scenes)
+            progress_bar.progress(progress)
+            status_text.text(f"Generating scene {i + 1}/{len(scenes)}: {scene['start_time']}")
             
-            # Create prompt
-            prompt = enhance_prompt(scene['text'], style)
-            st.write(f"**Scene {i+1}:** {scene['start_time']} - {prompt[:100]}...")
+            # Create prompt and generate image
+            prompt = create_image_prompt(scene['text'], style)
+            image_data = generate_flux_image(prompt)
             
-            # Generate image
-            image_data = generate_image(prompt)
-            
-            results.append({
+            # Store results
+            scene_result = {
                 **scene,
                 'prompt': prompt,
-                'image_data': image_data
-            })
+                'image_data': image_data,
+                'success': image_data is not None
+            }
+            generated_scenes.append(scene_result)
         
+        # Clear progress indicators
         progress_bar.empty()
+        status_text.empty()
         
-        # Show results
-        successful = sum(1 for r in results if r['image_data'])
-        st.success(f"Generated {successful}/{len(results)} images")
+        # Show generation summary
+        successful_count = sum(1 for scene in generated_scenes if scene['success'])
+        st.success(f"🎉 Generated {successful_count}/{len(scenes)} images successfully!")
         
-        if successful > 1:
-            zip_data = create_zip(results)
+        if successful_count == 0:
+            st.error("No images were generated. Please check your API token and try again.")
+            return
+        
+        # Download all button
+        if successful_count > 0:
+            zip_data = create_download_zip(generated_scenes)
             st.download_button(
-                "📦 Download All",
+                label="📦 Download All Images",
                 data=zip_data,
-                file_name="scenes.zip",
-                mime="application/zip"
+                file_name="srt_scenes_with_timestamps.zip",
+                mime="application/zip",
+                help="Download all generated images with timestamp-based filenames"
             )
         
-        # Display images
-        for i, result in enumerate(results):
-            st.subheader(f"Scene {i+1}: {result['start_time']} → {result['end_time']}")
+        st.divider()
+        
+        # Display results
+        st.subheader("🖼️ Generated Scenes")
+        
+        for scene in generated_scenes:
+            st.write(f"### Scene {scene['scene_number']}: {scene['start_time']} → {scene['end_time']}")
             
             col1, col2 = st.columns([1, 2])
             
             with col1:
-                st.write(f"**Text:** {result['text']}")
-                if result['image_data']:
+                st.write(f"**⏰ Time Range:** `{scene['start_time']}` to `{scene['end_time']}`")
+                st.write(f"**📝 Subtitles:** {scene['subtitle_count']} combined")
+                st.write(f"**📄 Text:** {scene['text'][:100]}...")
+                
+                if scene['success']:
+                    filename = create_filename_from_timestamp(scene['start_time'], scene['scene_number'])
                     st.download_button(
-                        f"💾 Download",
-                        data=result['image_data'],
-                        file_name=f"scene_{i+1}.webp",
-                        mime="image/webp"
+                        label="💾 Download Image",
+                        data=scene['image_data'],
+                        file_name=filename,
+                        mime="image/webp",
+                        key=f"download_scene_{scene['scene_number']}"
                     )
+                    
+                    # Show file info
+                    file_size = len(scene['image_data']) / 1024
+                    st.caption(f"📊 Size: {file_size:.1f} KB")
+                else:
+                    st.error("❌ Generation failed")
             
             with col2:
-                if result['image_data']:
-                    image = Image.open(io.BytesIO(result['image_data']))
-                    st.image(image, use_column_width=True)
+                if scene['success']:
+                    try:
+                        image = Image.open(io.BytesIO(scene['image_data']))
+                        st.image(
+                            image, 
+                            caption=f"Scene {scene['scene_number']} at {scene['start_time']}",
+                            use_column_width=True
+                        )
+                    except Exception as e:
+                        st.error(f"Error displaying image: {e}")
                 else:
-                    st.error("Failed to generate")
+                    st.info("No image to display")
             
-            with st.expander("View prompt"):
-                st.code(result['prompt'])
+            # Show prompt in expandable section
+            with st.expander(f"🔍 View Prompt for Scene {scene['scene_number']}"):
+                st.code(scene['prompt'], language="text")
+            
+            st.divider()
 
 if __name__ == "__main__":
     main()
