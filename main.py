@@ -1,222 +1,88 @@
 import streamlit as st
-import torch
-from diffusers import FluxPipeline
+import replicate
 from PIL import Image
-import io
-import time
+import requests
+from io import BytesIO
 
 # Set page config
 st.set_page_config(
-    page_title="FLUX Image Generator",
+    page_title="Flux Photo Generator",
     page_icon="🎨",
-    layout="wide"
+    layout="centered"
 )
 
-# Initialize session state
-if 'pipe' not in st.session_state:
-    st.session_state.pipe = None
-if 'model_loaded' not in st.session_state:
-    st.session_state.model_loaded = False
+# Get API key from secrets
+try:
+    api_key = st.secrets["REPLICATE_API_TOKEN"]
+    client = replicate.Client(api_token=api_key)
+except:
+    st.error("Please add REPLICATE_API_TOKEN to your Streamlit secrets")
+    st.stop()
 
-@st.cache_resource
-def load_model():
-    """Load the FLUX model with caching"""
-    try:
-        pipe = FluxPipeline.from_pretrained(
-            "black-forest-labs/FLUX.1-schnell", 
-            torch_dtype=torch.bfloat16
-        )
-        pipe.enable_model_cpu_offload()
-        return pipe
-    except Exception as e:
-        st.error(f"Error loading model: {str(e)}")
-        return None
+# App title
+st.title("🎨 Flux Photo Generator")
+st.write("Generate photos using Flux AI")
 
-def generate_image(pipe, prompt, guidance_scale, height, width, num_inference_steps, max_sequence_length):
-    """Generate image using the FLUX pipeline"""
-    try:
-        with st.spinner("Generating image..."):
-            start_time = time.time()
-            
-            result = pipe(
-                prompt=prompt,
-                guidance_scale=guidance_scale,
-                height=height,
-                width=width,
-                num_inference_steps=num_inference_steps,
-                max_sequence_length=max_sequence_length,
-            )
-            
-            end_time = time.time()
-            generation_time = end_time - start_time
-            
-            return result.images[0], generation_time
-    except Exception as e:
-        st.error(f"Error generating image: {str(e)}")
-        return None, 0
+# Text input for prompt
+prompt = st.text_area(
+    "Enter your photo prompt:",
+    placeholder="A majestic mountain landscape at sunset with a crystal clear lake reflecting the golden sky",
+    height=100
+)
 
-# Main app
-def main():
-    st.title("🎨 FLUX Image Generator")
-    st.markdown("Generate high-quality images using FLUX.1-schnell model")
-    
-    # Sidebar for model loading
-    with st.sidebar:
-        st.header("Model Status")
-        
-        if not st.session_state.model_loaded:
-            if st.button("Load FLUX Model", type="primary"):
-                with st.spinner("Loading FLUX model... This may take a few minutes."):
-                    st.session_state.pipe = load_model()
-                    if st.session_state.pipe is not None:
-                        st.session_state.model_loaded = True
-                        st.success("Model loaded successfully!")
-                        st.rerun()
-        else:
-            st.success("✅ Model loaded and ready!")
-            if st.button("Unload Model"):
-                st.session_state.pipe = None
-                st.session_state.model_loaded = False
-                st.rerun()
-    
-    # Main interface
-    if st.session_state.model_loaded and st.session_state.pipe is not None:
-        col1, col2 = st.columns([1, 1])
-        
-        with col1:
-            st.header("Generation Settings")
-            
-            # Prompt input
-            prompt = st.text_area(
-                "Prompt",
-                value="A cat holding a sign that says hello world",
-                height=100,
-                help="Describe the image you want to generate"
-            )
-            
-            # Advanced settings in expander
-            with st.expander("Advanced Settings"):
-                col_a, col_b = st.columns(2)
-                
-                with col_a:
-                    guidance_scale = st.slider(
-                        "Guidance Scale",
-                        min_value=0.0,
-                        max_value=10.0,
-                        value=0.0,
-                        step=0.1,
-                        help="Higher values follow the prompt more closely"
-                    )
-                    
-                    num_inference_steps = st.slider(
-                        "Inference Steps",
-                        min_value=1,
-                        max_value=20,
-                        value=4,
-                        help="More steps = higher quality but slower generation"
-                    )
-                
-                with col_b:
-                    height = st.selectbox(
-                        "Height",
-                        options=[512, 768, 1024],
-                        index=1,
-                        help="Image height in pixels"
-                    )
-                    
-                    width = st.selectbox(
-                        "Width",
-                        options=[512, 768, 1024, 1360],
-                        index=3,
-                        help="Image width in pixels"
-                    )
-                
-                max_sequence_length = st.slider(
-                    "Max Sequence Length",
-                    min_value=128,
-                    max_value=512,
-                    value=256,
-                    step=32,
-                    help="Maximum length for text encoding"
-                )
-            
-            # Generate button
-            if st.button("Generate Image", type="primary", use_container_width=True):
-                if prompt.strip():
-                    image, gen_time = generate_image(
-                        st.session_state.pipe,
-                        prompt,
-                        guidance_scale,
-                        height,
-                        width,
-                        num_inference_steps,
-                        max_sequence_length
-                    )
-                    
-                    if image is not None:
-                        st.session_state.generated_image = image
-                        st.session_state.generation_time = gen_time
-                        st.session_state.last_prompt = prompt
-                else:
-                    st.warning("Please enter a prompt!")
-        
-        with col2:
-            st.header("Generated Image")
-            
-            # Display generated image
-            if hasattr(st.session_state, 'generated_image'):
-                st.image(
-                    st.session_state.generated_image,
-                    caption=f"Prompt: {st.session_state.last_prompt}",
-                    use_column_width=True
+# Generate button
+if st.button("Generate Photo", type="primary"):
+    if not prompt:
+        st.warning("Please enter a prompt!")
+    else:
+        with st.spinner("Generating photo..."):
+            try:
+                # Generate image using Flux Schnell (fastest model)
+                output = replicate.run(
+                    "black-forest-labs/flux-schnell",
+                    input={
+                        "prompt": prompt,
+                        "width": 512,
+                        "height": 512,
+                        "num_outputs": 1,
+                        "num_inference_steps": 4
+                    }
                 )
                 
-                # Show generation time
-                st.info(f"⏱️ Generation time: {st.session_state.generation_time:.2f} seconds")
+                # Get the image URL
+                image_url = output[0] if isinstance(output, list) else output
+                
+                # Download and display image
+                response = requests.get(image_url)
+                image = Image.open(BytesIO(response.content))
+                
+                st.image(image, caption=prompt, use_column_width=True)
                 
                 # Download button
-                img_buffer = io.BytesIO()
-                st.session_state.generated_image.save(img_buffer, format='PNG')
-                img_buffer.seek(0)
-                
+                buf = BytesIO()
+                image.save(buf, format='PNG')
                 st.download_button(
                     label="Download Image",
-                    data=img_buffer,
-                    file_name=f"flux_generated_{int(time.time())}.png",
-                    mime="image/png",
-                    use_container_width=True
+                    data=buf.getvalue(),
+                    file_name="flux_generated.png",
+                    mime="image/png"
                 )
-            else:
-                st.info("👆 Generate an image using the settings on the left")
-    
-    else:
-        # Instructions when model is not loaded
-        st.info("""
-        ### Welcome to FLUX Image Generator!
-        
-        **To get started:**
-        1. Click "Load FLUX Model" in the sidebar
-        2. Wait for the model to load (this may take a few minutes on first run)
-        3. Enter your prompt and generate images!
-        
-        **System Requirements:**
-        - GPU with sufficient VRAM (recommended)
-        - At least 8GB RAM
-        - Stable internet connection for model download
-        """)
-        
-        with st.expander("About FLUX.1-schnell"):
-            st.markdown("""
-            FLUX.1-schnell is a fast, high-quality text-to-image model that can generate 
-            detailed images in just a few inference steps. It's optimized for speed while 
-            maintaining excellent image quality.
-            
-            **Features:**
-            - Fast generation (typically 4 steps)
-            - High resolution support
-            - Excellent prompt adherence
-            - Efficient memory usage with CPU offloading
-            """)
+                
+            except Exception as e:
+                st.error(f"Error generating image: {str(e)}")
 
-if __name__ == "__main__":
-    main
+# Setup instructions
+with st.expander("⚙️ Setup"):
+    st.markdown("""
+    **To configure secrets:**
+    
+    Create `.streamlit/secrets.toml` in your project:
+    ```toml
+    REPLICATE_API_TOKEN = "your_api_key_here"
+    ```
+    
+    Get your API key from [replicate.com/account/api-tokens](https://replicate.com/account/api-tokens)
+    """)
+
+st.markdown("---")
+st.markdown("Built with Streamlit 🚀")
