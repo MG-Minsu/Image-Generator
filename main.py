@@ -6,7 +6,6 @@ from io import BytesIO
 import re
 from typing import List, Tuple
 import zipfile
-import time
 
 # Set page config
 st.set_page_config(
