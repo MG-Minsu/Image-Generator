@@ -4,5 +4,4 @@ streamlit_option_menu
 aiohttp
 google-generativeai
 replicate
-torch
 time
