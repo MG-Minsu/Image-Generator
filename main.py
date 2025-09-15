@@ -1,410 +1,151 @@
 import streamlit as st
-import io
-import zipfile
-import re
+import replicate
 import requests
 from PIL import Image
-import replicate
-import os
-
-# Initialize Replicate API
-if "REPLICATE_API_TOKEN" in st.secrets:
-    replicate.api_token = st.secrets["REPLICATE_API_TOKEN"]
-    os.environ["REPLICATE_API_TOKEN"] = st.secrets["REPLICATE_API_TOKEN"]
-
-def parse_srt_file(content):
-    """Parse SRT file and extract subtitle blocks"""
-    blocks = content.strip().split('\n\n')
-    subtitles = []
-    
-    for block in blocks:
-        lines = block.strip().split('\n')
-        if len(lines) >= 3:
-            try:
-                # Extract subtitle info
-                number = int(lines[0])
-                time_range = lines[1]
-                text = ' '.join(lines[2:]).strip()
-                
-                # Parse timestamps
-                start, end = time_range.split(' --> ')
-                
-                subtitles.append({
-                    'number': number,
-                    'start': start.strip(),
-                    'end': end.strip(), 
-                    'text': text
-                })
-            except:
-                continue
-    
-    return subtitles
-
-def group_subtitles_into_scenes(subtitles, num_scenes):
-    """Group subtitles into the specified number of scenes"""
-    if not subtitles or num_scenes <= 0:
-        return []
-    
-    total_subs = len(subtitles)
-    subs_per_scene = max(1, total_subs // num_scenes)
-    
-    scenes = []
-    for i in range(num_scenes):
-        start_idx = i * subs_per_scene
-        
-        # For the last scene, include all remaining subtitles
-        if i == num_scenes - 1:
-            end_idx = total_subs
-        else:
-            end_idx = min(start_idx + subs_per_scene, total_subs)
-        
-        if start_idx < total_subs:
-            scene_subs = subtitles[start_idx:end_idx]
-            
-            # Combine all text from this scene group
-            combined_text = ' '.join([sub['text'] for sub in scene_subs])
-            
-            scenes.append({
-                'scene_number': i + 1,
-                'start_time': scene_subs[0]['start'],
-                'end_time': scene_subs[-1]['end'],
-                'text': combined_text,
-                'subtitle_count': len(scene_subs)
-            })
-    
-    return scenes
-
-def create_image_prompt(scene_text, style="cinematic"):
-    """Create optimized prompt for image generation"""
-    # Clean the text
-    clean_text = re.sub(r'[^\w\s.,!?-]', '', scene_text)
-    clean_text = ' '.join(clean_text.split())  # Remove extra spaces
-    
-    # Limit text length for better prompts
-    if len(clean_text) > 150:
-        clean_text = clean_text[:150] + "..."
-    
-    # Style-based prompt templates
-    style_templates = {
-        "cinematic": f"{clean_text}, cinematic scene, dramatic lighting, professional cinematography, high quality",
-        "realistic": f"{clean_text}, photorealistic, natural lighting, detailed, high resolution",
-        "artistic": f"{clean_text}, digital art, concept art, detailed illustration, vibrant colors",
-        "documentary": f"{clean_text}, documentary photography, natural moment, authentic, candid shot",
-        "dramatic": f"{clean_text}, dramatic scene, intense lighting, emotional atmosphere, high contrast"
-    }
-    
-    return style_templates.get(style, f"{clean_text}, {style}, high quality, detailed")
-
-import replicate
-import streamlit as st
-import requests
 import io
+import os
+from datetime import datetime
 
-def generate_flux_image(prompt, max_retries=3):
-    """
-    Generate image using Flux Schnell with improved error handling
-    """
-    for attempt in range(max_retries):
-        try:
-            st.write(f"🎨 Generating: {prompt[:50]}...")
-            
-            input_params = {
-                "prompt": prompt,
-                "go_fast": True,
-                "megapixels": "1",
-                "num_outputs": 1,
-                "aspect_ratio": "16:9",
-                "output_format": "webp",
-                "output_quality": 85,
-                "num_inference_steps": 4
-            }
-            
-            # Run the model
-            output = replicate.run(
-                "black-forest-labs/flux-schnell",
-                input=input_params
-            )
-            
-            # Check if we got output
-            if not output or len(output) == 0:
-                raise Exception("No output received from model")
-            
-            # Get the first output (should be a file-like object or URL)
-            image_output = output[0]
-            
-            # Handle different output types
-            if hasattr(image_output, 'read'):
-                # It's a file-like object, read directly
-                image_data = image_output.read()
-            elif isinstance(image_output, str) and image_output.startswith('http'):
-                # It's a URL, download the image
-                response = requests.get(image_output, timeout=30)
-                response.raise_for_status()
-                image_data = response.content
-            else:
-                raise Exception(f"Unexpected output type: {type(image_output)}")
-            
-            # Validate we got image data
-            if not image_data or len(image_data) < 1000:  # Very small files are likely errors
-                raise Exception("Received empty or invalid image data")
-            
-            st.success(f"✅ Generated image ({len(image_data)/1024:.1f} KB)")
-            return image_data
-            
-        except Exception as e:
-            error_msg = str(e)
-            st.warning(f"⚠️ Attempt {attempt + 1}/{max_retries} failed: {error_msg}")
-            
-            if attempt == max_retries - 1:  # Last attempt
-                st.error(f"❌ Failed to generate image after {max_retries} attempts: {error_msg}")
-                return None
+# Page configuration
+st.set_page_config(
+    page_title="FLUX SCHNELL Image Generator",
+    page_icon="🎨",
+    layout="wide"
+)
+
+# Title and description
+st.title("🎨 FLUX SCHNELL Image Generator")
+st.markdown("Generate high-quality images using the FLUX SCHNELL model from Black Forest Labs via Replicate.")
+
+# Sidebar for API key input
+st.sidebar.header("Configuration")
+api_key = st.sidebar.text_input(
+    "Replicate API Token",
+    type="password",
+    help="Enter your Replicate API token. Get one at https://replicate.com/account/api-tokens"
+)
+
+if api_key:
+    os.environ["REPLICATE_API_TOKEN"] = api_key
+
+# Main interface
+col1, col2 = st.columns([1, 1])
+
+with col1:
+    st.header("Input")
     
-    return None
-
-def test_api_connection():
-    """Test if Replicate API is properly configured"""
-    try:
-        # Try to run a very simple test
-        output = replicate.run(
-            "black-forest-labs/flux-schnell",
-            input={
-                "prompt": "test",
-                "go_fast": True,
-                "megapixels": "0.25",  # Smallest size for testing
-                "num_outputs": 1,
-                "num_inference_steps": 1  # Fastest generation
-            }
-        )
-        return True
-    except Exception as e:
-        st.error(f"API connection test failed: {str(e)}")
-        return False
-def create_filename_from_timestamp(timestamp, scene_num):
-    """Create clean filename from SRT timestamp"""
-    # Convert 00:01:23,456 to 00-01-23-456
-    clean_time = timestamp.replace(':', '-').replace(',', '-')
-    return f"scene_{scene_num:02d}_{clean_time}.webp"
-
-def create_download_zip(scenes_data):
-    """Create ZIP file with all generated images"""
-    zip_buffer = io.BytesIO()
-    
-    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-        for scene in scenes_data:
-            if scene['image_data']:
-                filename = create_filename_from_timestamp(scene['start_time'], scene['scene_number'])
-                zip_file.writestr(filename, scene['image_data'])
-                
-                # Add scene info text file
-                info_filename = f"scene_{scene['scene_number']:02d}_info.txt"
-                info_content = f"""Scene {scene['scene_number']}
-Start Time: {scene['start_time']}
-End Time: {scene['end_time']}
-Duration: {scene['start_time']} → {scene['end_time']}
-Subtitle Count: {scene['subtitle_count']}
-Text: {scene['text']}
-Prompt: {scene['prompt']}
-"""
-                zip_file.writestr(info_filename, info_content.encode('utf-8'))
-    
-    zip_buffer.seek(0)
-    return zip_buffer.getvalue()
-
-def main():
-    st.set_page_config(
-        page_title="SRT Scene Generator", 
-        page_icon="🎬", 
-        layout="wide"
+    # Prompt input
+    prompt = st.text_area(
+        "Image Prompt",
+        value='black forest gateau cake spelling out the words "FLUX SCHNELL", tasty, food photography, dynamic shot',
+        height=100,
+        help="Describe the image you want to generate"
     )
     
-    st.title("🎬 SRT Scene Generator")
-    st.markdown("Generate images from subtitle files using Flux AI")
+    # Additional settings (you can expand these based on FLUX SCHNELL capabilities)
+    with st.expander("Advanced Settings"):
+        st.info("FLUX SCHNELL is optimized for speed and uses default settings for most parameters.")
+        save_to_disk = st.checkbox("Save images to disk", value=False)
     
-    # Check API configuration
-    if "REPLICATE_API_TOKEN" not in st.secrets:
-        st.error("⚠️ Replicate API token not configured")
-        st.code('Add to secrets.toml: REPLICATE_API_TOKEN = "r8_your_token"')
-        st.stop()
-    else:
-        st.success("✅ Replicate API configured")
-    
-    # File upload
-    uploaded_file = st.file_uploader(
-        "📁 Upload SRT File", 
-        type=['srt'],
-        help="Upload your subtitle file to generate scene images"
-    )
-    
-    if not uploaded_file:
-        st.info("👆 Upload an SRT file to begin")
-        
-        with st.expander("📝 SRT Format Example"):
-            st.code("""1
-00:00:01,000 --> 00:00:05,000
-A person walks through a beautiful forest
+    # Generate button
+    generate_button = st.button("🚀 Generate Image", type="primary", use_container_width=True)
 
-2
-00:00:06,000 --> 00:00:10,000
-The sunlight filters through the green leaves
-
-3
-00:00:11,000 --> 00:00:15,000
-Birds are singing in the distance""")
-        return
+with col2:
+    st.header("Output")
     
-    # Parse uploaded SRT file
-    try:
-        srt_content = uploaded_file.read().decode('utf-8')
-        subtitles = parse_srt_file(srt_content)
-        
-        if not subtitles:
-            st.error("❌ No valid subtitles found in file")
-            return
-            
-        st.success(f"✅ Loaded {len(subtitles)} subtitles successfully")
-        
-    except Exception as e:
-        st.error(f"❌ Error reading SRT file: {str(e)}")
-        return
-    
-    # Configuration options
-    st.subheader("⚙️ Generation Settings")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        num_scenes = st.slider(
-            "📸 Number of Images to Generate", 
-            min_value=1, 
-            max_value=min(20, len(subtitles)), 
-            value=min(5, len(subtitles)),
-            help="How many images to create from your SRT file"
-        )
-    
-    with col2:
-        style = st.selectbox(
-            "🎨 Visual Style",
-            ["cinematic", "realistic", "artistic", "documentary", "dramatic"],
-            help="Choose the style for generated images"
-        )
-    
-    # Show how subtitles will be grouped
-    scenes = group_subtitles_into_scenes(subtitles, num_scenes)
-    
-    st.subheader("📋 Scene Preview")
-    st.info(f"Your {len(subtitles)} subtitles will be grouped into {len(scenes)} scenes")
-    
-    for scene in scenes:
-        with st.expander(f"Scene {scene['scene_number']}: {scene['start_time']} → {scene['end_time']}"):
-            st.write(f"**Timespan:** {scene['start_time']} to {scene['end_time']}")
-            st.write(f"**Includes:** {scene['subtitle_count']} subtitle(s)")
-            st.write(f"**Text:** {scene['text'][:200]}{'...' if len(scene['text']) > 200 else ''}")
-    
-    # Generate images
-    if st.button("🎨 Generate Images", type="primary"):
-        if not scenes:
-            st.error("No scenes to generate")
-            return
-        
-        st.subheader("🔄 Generating Images...")
-        
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        
-        generated_scenes = []
-        
-        for i, scene in enumerate(scenes):
-            # Update progress
-            progress = (i + 1) / len(scenes)
-            progress_bar.progress(progress)
-            status_text.text(f"Generating scene {i + 1}/{len(scenes)}: {scene['start_time']}")
-            
-            # Create prompt and generate image
-            prompt = create_image_prompt(scene['text'], style)
-            image_data = generate_flux_image(prompt)
-            
-            # Store results
-            scene_result = {
-                **scene,
-                'prompt': prompt,
-                'image_data': image_data,
-                'success': image_data is not None
-            }
-            generated_scenes.append(scene_result)
-        
-        # Clear progress indicators
-        progress_bar.empty()
-        status_text.empty()
-        
-        # Show generation summary
-        successful_count = sum(1 for scene in generated_scenes if scene['success'])
-        st.success(f"🎉 Generated {successful_count}/{len(scenes)} images successfully!")
-        
-        if successful_count == 0:
-            st.error("No images were generated. Please check your API token and try again.")
-            return
-        
-        # Download all button
-        if successful_count > 0:
-            zip_data = create_download_zip(generated_scenes)
-            st.download_button(
-                label="📦 Download All Images",
-                data=zip_data,
-                file_name="srt_scenes_with_timestamps.zip",
-                mime="application/zip",
-                help="Download all generated images with timestamp-based filenames"
-            )
-        
-        st.divider()
-        
-        # Display results
-        st.subheader("🖼️ Generated Scenes")
-        
-        for scene in generated_scenes:
-            st.write(f"### Scene {scene['scene_number']}: {scene['start_time']} → {scene['end_time']}")
-            
-            col1, col2 = st.columns([1, 2])
-            
-            with col1:
-                st.write(f"**⏰ Time Range:** `{scene['start_time']}` to `{scene['end_time']}`")
-                st.write(f"**📝 Subtitles:** {scene['subtitle_count']} combined")
-                st.write(f"**📄 Text:** {scene['text'][:100]}...")
-                
-                if scene['success']:
-                    filename = create_filename_from_timestamp(scene['start_time'], scene['scene_number'])
-                    st.download_button(
-                        label="💾 Download Image",
-                        data=scene['image_data'],
-                        file_name=filename,
-                        mime="image/webp",
-                        key=f"download_scene_{scene['scene_number']}"
+    if generate_button:
+        if not api_key:
+            st.error("Please enter your Replicate API token in the sidebar.")
+        elif not prompt.strip():
+            st.error("Please enter a prompt.")
+        else:
+            try:
+                with st.spinner("Generating image... This may take a few moments."):
+                    # Set up the input for Replicate
+                    input_data = {
+                        "prompt": prompt
+                    }
+                    
+                    # Run the model
+                    output = replicate.run(
+                        "black-forest-labs/flux-schnell",
+                        input=input_data
                     )
                     
-                    # Show file info
-                    file_size = len(scene['image_data']) / 1024
-                    st.caption(f"📊 Size: {file_size:.1f} KB")
+                    # Display the generated images
+                    if output:
+                        st.success(f"Generated {len(output)} image(s)!")
+                        
+                        for index, item in enumerate(output):
+                            # Get the image URL
+                            image_url = item.url() if hasattr(item, 'url') else str(item)
+                            
+                            # Display the image
+                            st.image(image_url, caption=f"Generated Image {index + 1}")
+                            
+                            # Provide download link
+                            st.markdown(f"**Image URL:** [{image_url}]({image_url})")
+                            
+                            # Save to disk if requested
+                            if save_to_disk:
+                                try:
+                                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                                    filename = f"flux_output_{timestamp}_{index}.webp"
+                                    
+                                    with open(filename, "wb") as file:
+                                        file.write(item.read())
+                                    
+                                    st.success(f"✅ Saved as {filename}")
+                                    
+                                except Exception as save_error:
+                                    st.error(f"Error saving image: {str(save_error)}")
+                    
+                    else:
+                        st.warning("No images were generated.")
+                        
+            except Exception as e:
+                st.error(f"Error generating image: {str(e)}")
+                
+                # Provide helpful error messages
+                if "authentication" in str(e).lower():
+                    st.error("Authentication failed. Please check your Replicate API token.")
+                elif "quota" in str(e).lower() or "limit" in str(e).lower():
+                    st.error("You may have reached your API quota or rate limit. Please try again later.")
                 else:
-                    st.error("❌ Generation failed")
-            
-            with col2:
-                if scene['success']:
-                    try:
-                        image = Image.open(io.BytesIO(scene['image_data']))
-                        st.image(
-                            image, 
-                            caption=f"Scene {scene['scene_number']} at {scene['start_time']}",
-                            use_column_width=True
-                        )
-                    except Exception as e:
-                        st.error(f"Error displaying image: {e}")
-                else:
-                    st.info("No image to display")
-            
-            # Show prompt in expandable section
-            with st.expander(f"🔍 View Prompt for Scene {scene['scene_number']}"):
-                st.code(scene['prompt'], language="text")
-            
-            st.divider()
+                    st.error("Make sure you have the required packages installed: `pip install replicate streamlit pillow`")
 
-if __name__ == "__main__":
-    main()
+# Information section
+with st.expander("ℹ️ About FLUX SCHNELL"):
+    st.markdown("""
+    **FLUX SCHNELL** is a fast text-to-image model from Black Forest Labs that generates high-quality images quickly.
+    
+    **Features:**
+    - Fast generation speed
+    - High-quality outputs
+    - Optimized for efficiency
+    
+    **Requirements:**
+    - Replicate API token (free tier available)
+    - Internet connection
+    
+    **Setup:**
+    1. Get your API token from [Replicate](https://replicate.com/account/api-tokens)
+    2. Enter it in the sidebar
+    3. Enter your prompt and click Generate!
+    """)
+
+# Example prompts
+with st.expander("💡 Example Prompts"):
+    st.markdown("""
+    Try these example prompts:
+    
+    - `a majestic lion in golden savanna, wildlife photography, sunset lighting`
+    - `futuristic city skyline at night, neon lights, cyberpunk style`
+    - `cozy coffee shop interior, warm lighting, books and plants`
+    - `abstract digital art, flowing colors, modern art style`
+    - `vintage car on mountain road, scenic landscape, golden hour`
+    """)
+
+# Footer
+st.markdown("---")
+st.markdown("Built with ❤️ using Streamlit and Replicate's FLUX SCHNELL model")
