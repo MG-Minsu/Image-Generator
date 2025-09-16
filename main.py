@@ -19,7 +19,7 @@ st.set_page_config(
 # Get API keys from secrets
 try:
     api_key = st.secrets["REPLICATE_API_TOKEN"]
-    client = replicate.Client(api_token=api_key)
+    replicate_client = replicate.Client(api_token=api_key)
 except:
     st.error("Please add REPLICATE_API_TOKEN to your Streamlit secrets")
     st.stop()
@@ -28,7 +28,6 @@ try:
     gemini_api_key = st.secrets["GEMINI_API_KEY"]
     genai.configure(api_key=gemini_api_key)
     gemini_model = genai.GenerativeModel('gemini-1.5-flash')
-    client = genai.Client()
 except:
     st.error("Please add GEMINI_API_KEY to your Streamlit secrets")
     st.stop()
@@ -120,18 +119,19 @@ Output: Two people facing each other in friendly greeting gesture, warm indoor l
 OUTPUT: Return only the optimized scene description for image generation."""
 
     try:
-        response = client.generate_content(model="gemini-1.5-flash",prompt)
+        response = gemini_model.generate_content(prompt)
         description = response.text.strip()
         description = description.strip('"\'')
         return description
     except Exception as e:
+        st.warning(f"Gemini API error: {str(e)}. Using fallback description.")
         # Fallback to original text if Gemini fails
         return f"A cinematic scene depicting: {text}"
 
 def generate_image(prompt: str, width: int = 512, height: int = 512) -> Image.Image:
     """Generate image using Flux model"""
     try:
-        output = replicate.run(
+        output = replicate_client.run(
             "black-forest-labs/flux-schnell",
             input={
                 "prompt": prompt,
@@ -144,6 +144,7 @@ def generate_image(prompt: str, width: int = 512, height: int = 512) -> Image.Im
         
         image_url = output[0] if isinstance(output, list) else output
         response = requests.get(image_url)
+        response.raise_for_status()  # Raise exception for bad status codes
         image = Image.open(BytesIO(response.content))
         
         return image
@@ -190,6 +191,15 @@ with st.sidebar:
         help="Choose the base size for images"
     )
     
+    # Limit number of images to prevent API overuse
+    max_images = st.slider(
+        "Maximum Images to Generate",
+        min_value=1,
+        max_value=50,
+        value=10,
+        help="Limit the number of images to generate (to prevent excessive API usage)"
+    )
+    
     def get_dimensions(ratio_text, size_text):
         if "512" in size_text:
             base_size = 512
@@ -198,26 +208,29 @@ with st.sidebar:
         else:
             base_size = 1024
         
+        # Ensure dimensions are divisible by 16 for Flux
         if "1:1" in ratio_text:
-            return base_size, base_size
+            width = height = base_size
         elif "16:9" in ratio_text:
             width = base_size
             height = int(base_size * 9 / 16)
-            return width, height
         elif "4:3" in ratio_text:
             width = base_size
             height = int(base_size * 3 / 4)
-            return width, height
         elif "3:4" in ratio_text:
             width = int(base_size * 3 / 4)
             height = base_size
-            return width, height
         elif "9:16" in ratio_text:
             width = int(base_size * 9 / 16)
             height = base_size
-            return width, height
         else:
-            return base_size, base_size
+            width = height = base_size
+        
+        # Round to nearest multiple of 16
+        width = (width // 16) * 16
+        height = (height // 16) * 16
+        
+        return width, height
     
     width, height = get_dimensions(aspect_ratio, size_option)
     st.caption(f"📐 Image dimensions: {width} × {height} pixels")
@@ -234,7 +247,17 @@ uploaded_file = st.file_uploader(
 
 if uploaded_file is not None:
     # Parse SRT file
-    srt_content = uploaded_file.read().decode('utf-8')
+    try:
+        srt_content = uploaded_file.read().decode('utf-8')
+    except UnicodeDecodeError:
+        try:
+            # Try different encoding if UTF-8 fails
+            uploaded_file.seek(0)
+            srt_content = uploaded_file.read().decode('latin-1')
+        except Exception as e:
+            st.error(f"Could not decode file. Please ensure it's a valid SRT file. Error: {str(e)}")
+            st.stop()
+    
     subtitles = parse_srt(srt_content)
     
     if not subtitles:
@@ -251,6 +274,11 @@ if uploaded_file is not None:
         else:
             st.info("📄 Processing each subtitle individually...")
             processed_entries = process_individual_subtitles(subtitles)
+        
+        # Limit entries based on max_images setting
+        if len(processed_entries) > max_images:
+            processed_entries = processed_entries[:max_images]
+            st.warning(f"⚠️ Limited to first {max_images} entries. Adjust the limit in the sidebar if needed.")
         
         st.write(f"**Processed entries:** {len(processed_entries)}")
         
@@ -287,22 +315,30 @@ if uploaded_file is not None:
             
         else:
             st.info("📝 Using original subtitle text...")
-            scene_descriptions = [(timestamp, text, text) for timestamp, text in processed_entries]
+            scene_descriptions = [(timestamp, text, f"A cinematic scene: {text}") for timestamp, text in processed_entries]
         
         # Show preview of scene descriptions
         with st.expander("🎬 Preview Scene Descriptions"):
-            for i, (timestamp, original, description) in enumerate(scene_descriptions[:10]):
+            for i, (timestamp, original, description) in enumerate(scene_descriptions[:5]):  # Show first 5
                 st.write(f"**{i+1}. [{timestamp}]**")
                 st.write(f"*Original:* {original}")
                 st.write(f"*Scene Description:* {description}")
                 st.write("---")
-            if len(scene_descriptions) > 10:
-                st.text(f"... and {len(scene_descriptions) - 10} more descriptions")
+            if len(scene_descriptions) > 5:
+                st.text(f"... and {len(scene_descriptions) - 5} more descriptions")
         
         # Generate images
         st.subheader("🎨 Generate Images")
         
+        # Show cost estimate
+        estimated_cost = len(scene_descriptions) * 0.003  # Rough estimate for Flux Schnell
+        st.info(f"💰 Estimated cost: ~${estimated_cost:.3f} USD for {len(scene_descriptions)} images")
+        
         if st.button("🚀 Generate All Images", type="primary", use_container_width=True):
+            # Initialize session state for storing images
+            if 'generated_images' not in st.session_state:
+                st.session_state.generated_images = []
+            
             progress_bar = st.progress(0)
             status_text = st.empty()
             
@@ -319,13 +355,21 @@ if uploaded_file is not None:
                 if image:
                     generated_images.append((image, description, original_text, timestamp))
                     
+                    # Convert image to bytes for download
                     buf = BytesIO()
                     image.save(buf, format='PNG')
+                    buf.seek(0)
                     filename = f"{timestamp}.png"
                     image_data_for_download.append((buf.getvalue(), filename))
+                else:
+                    st.error(f"Failed to generate image for timestamp: {timestamp}")
             
             progress_bar.progress(1.0)
-            status_text.text("🎉 All images generated!")
+            status_text.text(f"🎉 Generated {len(generated_images)} out of {len(scene_descriptions)} images!")
+            
+            # Store in session state
+            st.session_state.generated_images = generated_images
+            st.session_state.image_data_for_download = image_data_for_download
             
             # Display generated images
             if generated_images:
@@ -345,9 +389,10 @@ if uploaded_file is not None:
                         st.write("**🎭 Scene Description (Used for Image):**")
                         st.write(description)
                         
-                        # Download button
+                        # Download button for individual image
                         buf = BytesIO()
                         image.save(buf, format='PNG')
+                        buf.seek(0)
                         st.download_button(
                             label="💾 Download Image",
                             data=buf.getvalue(),
@@ -367,14 +412,26 @@ if uploaded_file is not None:
                         for img_data, filename in image_data_for_download:
                             zip_file.writestr(filename, img_data)
                     
+                    zip_buffer.seek(0)
                     st.download_button(
                         label="📦 Download All Images (ZIP)",
                         data=zip_buffer.getvalue(),
                         file_name="srt_generated_images.zip",
                         mime="application/zip",
-                        key="download_all_images",
                         use_container_width=True
                     )
+
+# Display previously generated images if they exist in session state
+elif 'generated_images' in st.session_state and st.session_state.generated_images:
+    st.subheader("🖼️ Previously Generated Images")
+    for i, (image, description, original_text, timestamp) in enumerate(st.session_state.generated_images):
+        with st.expander(f"Image {i+1}: {timestamp}"):
+            col1, col2 = st.columns([2, 1])
+            with col1:
+                st.image(image, use_container_width=True)
+            with col2:
+                st.write("**Original:**", original_text)
+                st.write("**Description:**", description)
 
 st.markdown("---")
 st.markdown("🚀 **Built with Streamlit** | 🤖 **Powered by Flux AI & Gemini**")
