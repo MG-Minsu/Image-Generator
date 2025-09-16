@@ -22,8 +22,8 @@ except:
     st.error("Please add REPLICATE_API_TOKEN to your Streamlit secrets")
     st.stop()
 
-def parse_srt(srt_content: str) -> List[Tuple[str, str, str]]:
-    """Parse SRT content and return list of (timestamp, start_time, text) tuples"""
+def parse_srt(srt_content: str) -> List[Tuple[str, str, str, str]]:
+    """Parse SRT content and return list of (timestamp, start_time, end_time, text) tuples"""
     # Split by double newlines to get individual subtitle blocks
     blocks = re.split(r'\n\s*\n', srt_content.strip())
     
@@ -34,45 +34,44 @@ def parse_srt(srt_content: str) -> List[Tuple[str, str, str]]:
             
         lines = block.strip().split('\n')
         if len(lines) >= 3:
-            # First line is the sequence number
+            # First line is the sequence number (we'll skip this)
             seq_num = lines[0].strip()
             # Second line is the timestamp
             timestamp = lines[1].strip()
             # Remaining lines are the subtitle text
             text = ' '.join(lines[2:]).strip()
             
-            # Extract start time for sorting/reference
-            start_time = timestamp.split(' --> ')[0] if ' --> ' in timestamp else timestamp
+            # Extract start and end times
+            if ' --> ' in timestamp:
+                start_time, end_time = timestamp.split(' --> ')
+                start_time = start_time.strip()
+                end_time = end_time.strip()
+            else:
+                start_time = timestamp
+                end_time = timestamp
             
-            subtitles.append((seq_num, start_time, text))
+            subtitles.append((timestamp, start_time, end_time, text))
     
     return subtitles
 
-def group_subtitles(subtitles: List[Tuple[str, str, str]], num_groups: int) -> List[str]:
-    """Group subtitles into specified number of groups and combine their text"""
-    if not subtitles or num_groups <= 0:
-        return []
+def split_into_sentences(subtitles: List[Tuple[str, str, str, str]]) -> List[Tuple[str, str]]:
+    """Split subtitle text into individual sentences with their timestamps"""
+    sentences = []
     
-    # Calculate group size
-    total_subtitles = len(subtitles)
-    group_size = max(1, total_subtitles // num_groups)
+    for timestamp, start_time, end_time, text in subtitles:
+        # Split text into sentences using multiple sentence delimiters
+        sentence_parts = re.split(r'[.!?]+', text)
+        
+        for i, sentence in enumerate(sentence_parts):
+            sentence = sentence.strip()
+            if sentence:  # Only add non-empty sentences
+                # Create a unique timestamp for each sentence
+                sentence_timestamp = f"{start_time}-{i+1}" if len(sentence_parts) > 2 else start_time
+                # Clean timestamp for filename (remove problematic characters)
+                clean_timestamp = re.sub(r'[^\w\-_]', '_', sentence_timestamp)
+                sentences.append((clean_timestamp, sentence))
     
-    groups = []
-    for i in range(0, total_subtitles, group_size):
-        group_texts = []
-        group_end = min(i + group_size, total_subtitles)
-        
-        for j in range(i, group_end):
-            group_texts.append(subtitles[j][2])  # Get the text part
-        
-        combined_text = ' '.join(group_texts)
-        groups.append(combined_text)
-        
-        # If we've reached the desired number of groups, break
-        if len(groups) >= num_groups:
-            break
-    
-    return groups
+    return sentences
 
 def enhance_prompt_for_image_generation(text: str) -> str:
     """Enhance subtitle text to be more suitable for image generation"""
@@ -115,19 +114,11 @@ def generate_image(prompt: str, width: int = 512, height: int = 512) -> Image.Im
 
 # App title and description
 st.title("🎬 SRT Image Generator")
-st.write("Upload an SRT subtitle file and generate images based on subtitle content")
+st.write("Upload an SRT subtitle file and generate images for each sentence")
 
 # Sidebar configuration
 with st.sidebar:
     st.header("Configuration")
-    
-    num_images = st.slider(
-        "Number of images to generate",
-        min_value=1,
-        max_value=20,
-        value=5,
-        help="This will group your subtitles into the specified number of segments"
-    )
     
     st.subheader("Image Settings")
     col1, col2 = st.columns(2)
@@ -140,6 +131,15 @@ with st.sidebar:
         "Enhance prompts for better images",
         value=True,
         help="Automatically improve subtitle text for image generation"
+    )
+    
+    # Option to limit number of sentences for processing
+    max_sentences = st.number_input(
+        "Max sentences to process (0 = all)",
+        min_value=0,
+        max_value=100,
+        value=10,
+        help="Limit processing to avoid long generation times"
     )
 
 # File upload
@@ -157,29 +157,24 @@ if uploaded_file is not None:
     if not subtitles:
         st.error("Could not parse any subtitles from the uploaded file. Please check the SRT format.")
     else:
-        st.success(f"Successfully parsed {len(subtitles)} subtitles")
+        st.success(f"Successfully parsed {len(subtitles)} subtitle entries")
         
-        # Show preview of subtitles
-        with st.expander("Preview Subtitles"):
-            for i, (seq, time, text) in enumerate(subtitles[:10]):  # Show first 10
-                st.text(f"{seq}. [{time}] {text}")
-            if len(subtitles) > 10:
-                st.text(f"... and {len(subtitles) - 10} more")
+        # Split into sentences
+        sentences = split_into_sentences(subtitles)
         
-        # Group subtitles
-        grouped_texts = group_subtitles(subtitles, num_images)
+        # Apply sentence limit if specified
+        if max_sentences > 0:
+            sentences = sentences[:max_sentences]
+            st.info(f"Processing first {len(sentences)} sentences (limited by max setting)")
         
-        if grouped_texts:
-            st.subheader(f"Generated {len(grouped_texts)} text groups:")
-            
-            # Show grouped texts
-            for i, text in enumerate(grouped_texts):
-                with st.expander(f"Group {i+1} - Preview"):
-                    enhanced_text = enhance_prompt_for_image_generation(text) if enable_prompt_enhancement else text
-                    st.write(f"**Original text:** {text[:200]}{'...' if len(text) > 200 else ''}")
-                    if enable_prompt_enhancement:
-                        st.write(f"**Enhanced prompt:** {enhanced_text}")
-            
+        st.success(f"Found {len(sentences)} sentences to process")
+        
+        # Show preview of all sentences
+        with st.expander("Preview All Sentences"):
+            for i, (timestamp, sentence) in enumerate(sentences):
+                st.text(f"{i+1}. [{timestamp}] {sentence}")
+        
+        if sentences:
             # Generate images button
             if st.button("🎨 Generate All Images", type="primary"):
                 progress_bar = st.progress(0)
@@ -188,23 +183,22 @@ if uploaded_file is not None:
                 generated_images = []
                 image_data_for_download = []
                 
-                for i, text in enumerate(grouped_texts):
-                    status_text.text(f"Generating image {i+1} of {len(grouped_texts)}...")
-                    progress_bar.progress((i) / len(grouped_texts))
+                for i, (timestamp, sentence) in enumerate(sentences):
+                    status_text.text(f"Generating image {i+1} of {len(sentences)}...")
+                    progress_bar.progress((i) / len(sentences))
                     
                     # Generate image
-                    prompt = enhance_prompt_for_image_generation(text) if enable_prompt_enhancement else text
+                    prompt = enhance_prompt_for_image_generation(sentence) if enable_prompt_enhancement else sentence
                     image = generate_image(prompt, width, height)
                     
                     if image:
-                        generated_images.append((image, prompt, i+1))
+                        generated_images.append((image, prompt, timestamp, sentence))
                         
-                        # Save image data for download
+                        # Save image data for download with timestamp as filename
                         buf = BytesIO()
                         image.save(buf, format='PNG')
-                        image_data_for_download.append((buf.getvalue(), f"srt_image_{i+1}.png"))
-                    
-                    # Small delay to avoid rate limitin
+                        filename = f"{timestamp}.png"
+                        image_data_for_download.append((buf.getvalue(), filename))
                 
                 progress_bar.progress(1.0)
                 status_text.text("All images generated!")
@@ -213,25 +207,33 @@ if uploaded_file is not None:
                 if generated_images:
                     st.subheader("Generated Images")
                     
-                    # Create columns for image display
-                    cols = st.columns(min(3, len(generated_images)))
-                    
-                    for i, (image, prompt, img_num) in enumerate(generated_images):
-                        with cols[i % len(cols)]:
-                            st.image(image, caption=f"Image {img_num}", use_container_width=True)
-                            with st.expander(f"Prompt for Image {img_num}"):
-                                st.text(prompt)
+                    # Display images in a grid
+                    for i, (image, prompt, timestamp, original_text) in enumerate(generated_images):
+                        st.markdown(f"### Image {i+1}: `{timestamp}`")
+                        
+                        col1, col2 = st.columns([2, 1])
+                        
+                        with col1:
+                            st.image(image, use_container_width=True)
+                        
+                        with col2:
+                            st.write(f"**Original text:** {original_text}")
+                            if enable_prompt_enhancement:
+                                with st.expander("Enhanced prompt"):
+                                    st.text(prompt)
                             
                             # Individual download button
                             buf = BytesIO()
                             image.save(buf, format='PNG')
                             st.download_button(
-                                label=f"Download Image {img_num}",
+                                label=f"Download",
                                 data=buf.getvalue(),
-                                file_name=f"srt_image_{img_num}.png",
+                                file_name=f"{timestamp}.png",
                                 mime="image/png",
-                                key=f"download_{img_num}"
+                                key=f"download_{timestamp}"
                             )
+                        
+                        st.divider()
                     
                     # Create ZIP file for bulk download
                     if len(image_data_for_download) > 1:
@@ -253,20 +255,21 @@ with st.expander("ℹ️ How to use"):
     st.markdown("""
     **Steps:**
     1. Upload an SRT subtitle file using the file uploader
-    2. Configure the number of images you want to generate (this will group your subtitles)
-    3. Adjust image dimensions and other settings in the sidebar
-    4. Click "Generate All Images" to create images based on subtitle content
+    2. Adjust image dimensions and other settings in the sidebar
+    3. Set a maximum number of sentences to process (to avoid long generation times)
+    4. Click "Generate All Images" to create images for each sentence
     
     **How it works:**
-    - Your SRT file is parsed to extract subtitle text
-    - Subtitles are grouped into the number of segments you specify
-    - Each group's text is combined and used as a prompt for image generation
+    - Your SRT file is parsed to extract subtitle text and timestamps
+    - Each subtitle is split into individual sentences
+    - Each sentence is used as a prompt for image generation
+    - Images are saved with timestamps as filenames
     - Images are generated using the Flux AI model
     
     **Tips:**
     - Enable "Enhance prompts" for better image quality
-    - Use fewer images for longer, more detailed prompts per image
-    - Use more images for more granular scene representation
+    - Use the sentence limit to test with a smaller batch first
+    - Timestamps are cleaned for use as filenames (special characters replaced with underscores)
     """)
 
 # Setup instructions
