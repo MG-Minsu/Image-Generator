@@ -66,9 +66,13 @@ def split_into_sentences(subtitles: List[Tuple[str, str, str, str]]) -> List[Tup
             sentence = sentence.strip()
             if sentence:  # Only add non-empty sentences
                 # Create a unique timestamp for each sentence
-                sentence_timestamp = f"{start_time}-{i+1}" if len(sentence_parts) > 2 else start_time
-                # Clean timestamp for filename (remove problematic characters)
-                clean_timestamp = re.sub(r'[^\w\-_]', '_', sentence_timestamp)
+                if len(sentence_parts) > 2:
+                    sentence_timestamp = f"{start_time}_sentence_{i+1}"
+                else:
+                    sentence_timestamp = start_time
+                
+                # Clean timestamp for filename and display (keep colon format for readability)
+                clean_timestamp = re.sub(r'[^\w:,\-_]', '_', sentence_timestamp)
                 sentences.append((clean_timestamp, sentence))
     
     return sentences
@@ -250,40 +254,7 @@ if uploaded_file is not None:
                             key="download_all"
                         )
 
-# Information section
-with st.expander("ℹ️ How to use"):
-    st.markdown("""
-    **Steps:**
-    1. Upload an SRT subtitle file using the file uploader
-    2. Adjust image dimensions and other settings in the sidebar
-    3. Set a maximum number of sentences to process (to avoid long generation times)
-    4. Click "Generate All Images" to create images for each sentence
-    
-    **How it works:**
-    - Your SRT file is parsed to extract subtitle text and timestamps
-    - Each subtitle is split into individual sentences
-    - Each sentence is used as a prompt for image generation
-    - Images are saved with timestamps as filenames
-    - Images are generated using the Flux AI model
-    
-    **Tips:**
-    - Enable "Enhance prompts" for better image quality
-    - Use the sentence limit to test with a smaller batch first
-    - Timestamps are cleaned for use as filenames (special characters replaced with underscores)
-    """)
 
-# Setup instructions
-with st.expander("⚙️ Setup Instructions"):
-    st.markdown("""
-    **To configure API access:**
-    
-    Create `.streamlit/secrets.toml` in your project:
-    ```toml
-    REPLICATE_API_TOKEN = "your_api_key_here"
-    ```
-    
-    Get your API key from [replicate.com/account/api-tokens](https://replicate.com/account/api-tokens)
-    """)
 
 st.markdown("---")
 st.markdown("Built with Streamlit 🚀 | Powered by Flux AI")
