@@ -6,8 +6,8 @@ from io import BytesIO
 import re
 from typing import List, Tuple
 import zipfile
-import google
 import google.generativeai as genai
+
 
 # Set page config
 st.set_page_config(
@@ -92,29 +92,31 @@ def process_individual_subtitles(subtitles: List[Tuple[str, str, str, str]]) -> 
 
 def describe_scene_with_gemini(text: str) -> str:
     """Use Gemini to describe what's happening in the sentence for visual representation"""
-    prompt = f"""Analyze this subtitle text and describe what is visually happening in the scene.
+    prompt = f"""Analyze this subtitle text and create a visual scene description optimized for AI image generation.
 
 SUBTITLE TEXT: "{text}"
 
-TASK: Describe what is visually occurring in this moment. Focus on:
+TASK: Describe the visual scene in a way that will work perfectly with AI image generation models like Flux. Focus on:
 - What actions are taking place
-- What the setting/environment looks like  
-- Who is present in the scene
-- What objects or elements are visible
-- The mood or atmosphere
+- Setting/environment details
+- Characters and their positioning
+- Visual elements, objects, colors
+- Mood, lighting, atmosphere
+- Camera perspective
 
 RULES:
-- Write 15-25 words describing the visual scene
-- Focus on what a camera would capture
-- Be specific about actions, settings, and visual elements
-- Don't just repeat the dialogue - interpret the scene
-- Use cinematic language
+- Write 25-40 words that work well for AI image generation
+- Use specific, visual keywords
+- Include cinematic/photographic terms when appropriate
+- Be concrete about visual elements
+- Focus on what would make a compelling image
+- Don't just repeat dialogue - interpret the visual scene
 
 EXAMPLE:
 Input: "Hello, how are you today?"
-Output: Two people meeting and greeting each other warmly in a comfortable indoor setting with natural lighting
+Output: Two people facing each other in friendly greeting gesture, warm indoor lighting, modern casual setting, medium shot composition, natural expressions, contemporary clothing
 
-OUTPUT: Return only the scene description, nothing else."""
+OUTPUT: Return only the optimized scene description for image generation."""
 
     try:
         response = gemini_model.generate_content(prompt)
@@ -123,7 +125,7 @@ OUTPUT: Return only the scene description, nothing else."""
         return description
     except Exception as e:
         # Fallback to original text if Gemini fails
-        return f"A scene depicting: {text}"
+        return f"A cinematic scene depicting: {text}"
 
 def generate_image(prompt: str, width: int = 512, height: int = 512) -> Image.Image:
     """Generate image using Flux model"""
@@ -262,7 +264,7 @@ if uploaded_file is not None:
         st.subheader("🎭 Scene Descriptions")
         
         if use_gemini_description.startswith("Use Gemini"):
-            st.info("🤖 Using Gemini to create scene descriptions...")
+            st.info("🤖 Using Gemini to create optimized scene descriptions for image generation...")
             
             # Create descriptions with progress tracking
             scene_descriptions = []
@@ -273,14 +275,14 @@ if uploaded_file is not None:
                 status_text = st.empty()
                 
                 for i, (timestamp, text) in enumerate(processed_entries):
-                    status_text.text(f"Creating description {i+1} of {len(processed_entries)}...")
+                    status_text.text(f"Creating optimized scene description {i+1} of {len(processed_entries)}...")
                     progress_bar.progress(i / len(processed_entries))
                     
                     description = describe_scene_with_gemini(text)
                     scene_descriptions.append((timestamp, text, description))
                 
                 progress_bar.progress(1.0)
-                status_text.text("✅ All scene descriptions created!")
+                status_text.text("✅ All optimized scene descriptions created!")
             
         else:
             st.info("📝 Using original subtitle text...")
@@ -291,7 +293,7 @@ if uploaded_file is not None:
             for i, (timestamp, original, description) in enumerate(scene_descriptions[:10]):
                 st.write(f"**{i+1}. [{timestamp}]**")
                 st.write(f"*Original:* {original}")
-                st.write(f"*Description:* {description}")
+                st.write(f"*Scene Description:* {description}")
                 st.write("---")
             if len(scene_descriptions) > 10:
                 st.text(f"... and {len(scene_descriptions) - 10} more descriptions")
@@ -310,7 +312,7 @@ if uploaded_file is not None:
                 status_text.text(f"Generating image {i+1} of {len(scene_descriptions)}...")
                 progress_bar.progress(i / len(scene_descriptions))
                 
-                # Use the scene description as the prompt
+                # Use the scene description as the prompt for Flux AI
                 image = generate_image(description, width, height)
                 
                 if image:
@@ -339,7 +341,7 @@ if uploaded_file is not None:
                     with col2:
                         st.write("**📝 Original Subtitle:**")
                         st.write(original_text)
-                        st.write("**🎭 Scene Description:**")
+                        st.write("**🎭 Scene Description (Used for Image):**")
                         st.write(description)
                         
                         # Download button
