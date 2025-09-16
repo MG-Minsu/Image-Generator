@@ -27,7 +27,7 @@ except:
 try:
     gemini_api_key = st.secrets["GEMINI_API_KEY"]
     genai.configure(api_key=gemini_api_key)
-    gemini_model = genai.GenerativeModel('gemini-1.5-flash')
+    gemini_model = genai.GenerativeModel('gemini-2.5-flash')
 except:
     st.error("Please add GEMINI_API_KEY to your Streamlit secrets")
     st.stop()
@@ -180,7 +180,7 @@ def create_enhanced_fallback_description(text: str) -> str:
     
     return description
 
-def generate_image(prompt: str, width: int = 960, height: int = 540) -> Image.Image:
+def generate_image(prompt: str, width: int = 1024, height: int = 574) -> Image.Image:
     """Generate image using Flux model"""
     try:
         output = replicate_client.run(
@@ -231,7 +231,7 @@ with st.sidebar:
     st.header("🖼️ Image Settings")
     
     # Fixed dimensions - closest to qHD but divisible by 16
-    width, height = 960, 544  # 960÷16=60, 544÷16=34
+    width, height = 1024, 574  # 960÷16=60, 544÷16=34
     st.info(f"📐 Image dimensions: {width} × {height} pixels (16:9 ratio)")
     
     # Limit number of images to prevent API overuse
