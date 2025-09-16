@@ -180,7 +180,7 @@ def create_enhanced_fallback_description(text: str) -> str:
     
     return description
 
-def generate_image(prompt: str, width: int = 960, height: int = 540) -> Image.Image:
+def generate_image(prompt: str, width: int = 512, height: int = 512) -> Image.Image:
     """Generate image using Flux model"""
     try:
         output = replicate_client.run(
@@ -230,18 +230,9 @@ with col2:
 with st.sidebar:
     st.header("🖼️ Image Settings")
     
-    aspect_ratio = st.selectbox(
-        "Aspect Ratio",
-        ["16:9 (Widescreen)", "1:1 (Square)", "4:3 (Classic)", "3:4 (Portrait)", "9:16 (Vertical)"],
-        help="Choose the aspect ratio for generated images"
-    )
-    
-    size_option = st.selectbox(
-        "Image Size",
-        ["Small (512px)", "Medium (768px)", "Large (1024px)"],
-        index=1,
-        help="Choose the base size for images"
-    )
+    # Fixed dimensions - closest to qHD but divisible by 16
+    width, height = 960, 544  # 960÷16=60, 544÷16=34
+    st.info(f"📐 Image dimensions: {width} × {height} pixels (16:9 ratio)")
     
     # Limit number of images to prevent API overuse
     max_images = st.slider(
@@ -258,64 +249,6 @@ with st.sidebar:
         "🔧 Use Enhanced Fallback Descriptions Only",
         help="Skip Gemini API calls and use smart keyword-based descriptions instead"
     )
-    
-    def get_dimensions(ratio_text, size_text):
-        # Get base size
-        if "512" in size_text:
-            base_size = 512
-        elif "768" in size_text:
-            base_size = 768
-        else:
-            base_size = 1024
-        
-        # Calculate dimensions based on aspect ratio
-        if "1:1" in ratio_text:
-            # Square
-            width = height = base_size
-        elif "16:9" in ratio_text:
-            # Widescreen - width is longer
-            if base_size == 512:
-                width, height = 1024, 576
-            elif base_size == 768:
-                width, height = 1152, 648
-            else:  # 1024
-                width, height = 1152, 648
-        elif "4:3" in ratio_text:
-            # Classic - width is longer
-            if base_size == 512:
-                width, height = 768, 576
-            elif base_size == 768:
-                width, height = 1024, 768
-            else:  # 1024
-                width, height = 1024, 768
-        elif "3:4" in ratio_text:
-            # Portrait - height is longer
-            if base_size == 512:
-                width, height = 576, 768
-            elif base_size == 768:
-                width, height = 768, 1024
-            else:  # 1024
-                width, height = 768, 1024
-        elif "9:16" in ratio_text:
-            # Vertical - height is longer
-            if base_size == 512:
-                width, height = 576, 1024
-            elif base_size == 768:
-                width, height = 648, 1152
-            else:  # 1024
-                width, height = 648, 1152
-        else:
-            # Default to square
-            width = height = base_size
-        
-        # Ensure dimensions are multiples of 16 (required by Flux)
-        width = max(512, (width // 16) * 16)
-        height = max(512, (height // 16) * 16)
-        
-        return width, height
-    
-    width, height = get_dimensions(aspect_ratio, size_option)
-    st.caption(f"📐 Image dimensions: {width} × {height} pixels")
 
 st.divider()
 
