@@ -92,7 +92,7 @@ def process_individual_subtitles(subtitles: List[Tuple[str, str, str, str]]) -> 
 
 def describe_scene_with_gemini(text: str) -> str:
     """Use Gemini to describe what's happening in the sentence for visual representation"""
-    prompt = f"""Analyze this subtitle text and create a visual scene description optimized for AI image generation.
+    prompt = f"""Analyze this subtitle text and create a visual scene description optimized for AI image generation. Generate a 16:9 ration image
 
 SUBTITLE TEXT: "{text}"
 
