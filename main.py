@@ -189,6 +189,13 @@ def enhance_prompt_for_image_generation(text: str) -> str:
 st.title("🎬 SRT Image Generator")
 st.write("Upload an SRT subtitle file and generate images for each subtitle entry")
 
+# Processing options
+use_gemini_processing = st.checkbox(
+    "🤖 Use Gemini AI for smart grouping & prompts",
+    value=True,
+    help="Use Gemini to group subtitles into complete sentences and create enhanced visual prompts"
+)
+
 # Sidebar configuration
 with st.sidebar:
     st.header("Configuration")
