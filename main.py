@@ -6,6 +6,7 @@ from io import BytesIO
 import re
 from typing import List, Tuple
 import zipfile
+import google.generativeai as genai
 
 # Set page config
 st.set_page_config(
@@ -14,12 +15,20 @@ st.set_page_config(
     layout="wide"
 )
 
-# Get API key from secrets
+# Get API keys from secrets
 try:
     api_key = st.secrets["REPLICATE_API_TOKEN"]
     client = replicate.Client(api_token=api_key)
 except:
     st.error("Please add REPLICATE_API_TOKEN to your Streamlit secrets")
+    st.stop()
+
+try:
+    gemini_api_key = st.secrets["GEMINI_API_KEY"]
+    genai.configure(api_key=gemini_api_key)
+    gemini_model = genai.GenerativeModel('gemini-pro')
+except:
+    st.error("Please add GEMINI_API_KEY to your Streamlit secrets")
     st.stop()
 
 def parse_srt(srt_content: str) -> List[Tuple[str, str, str, str]]:
@@ -54,8 +63,80 @@ def parse_srt(srt_content: str) -> List[Tuple[str, str, str, str]]:
     
     return subtitles
 
+def group_subtitles_with_gemini(subtitles: List[Tuple[str, str, str, str]]) -> List[Tuple[str, str]]:
+    """Use Gemini to group subtitles into complete sentences and create enhanced prompts"""
+    if not subtitles:
+        return []
+    
+    # Prepare subtitle text for Gemini
+    subtitle_text = ""
+    for i, (timestamp, start_time, end_time, text) in enumerate(subtitles):
+        subtitle_text += f"{i+1}. [{start_time}] {text}\n"
+    
+    prompt = f"""
+    Please analyze these subtitles and group them into complete, meaningful sentences. Then create enhanced visual prompts suitable for AI image generation.
+
+    Subtitles:
+    {subtitle_text}
+
+    Instructions:
+    1. Group related subtitle fragments into complete sentences
+    2. Each group should represent a coherent visual scene or moment
+    3. For each group, provide:
+       - The timestamp of the first subtitle in that group (format: HH:MM:SS)
+       - An enhanced visual prompt that describes what should be shown in an image
+    4. The enhanced prompts should be cinematic and descriptive, focusing on visual elements, settings, actions, and mood
+    5. Avoid dialogue-heavy prompts; instead describe the scene visually
+
+    Format your response exactly like this:
+    TIMESTAMP: HH:MM:SS
+    PROMPT: [Enhanced visual description]
+
+    TIMESTAMP: HH:MM:SS  
+    PROMPT: [Enhanced visual description]
+
+    (Continue for all groups...)
+    """
+    
+    try:
+        response = gemini_model.generate_content(prompt)
+        return parse_gemini_response(response.text)
+    except Exception as e:
+        st.error(f"Error using Gemini API: {str(e)}")
+        # Fallback to original processing
+        return process_srt_entries(subtitles)
+
+def parse_gemini_response(response_text: str) -> List[Tuple[str, str]]:
+    """Parse Gemini's response to extract timestamps and prompts"""
+    entries = []
+    lines = response_text.strip().split('\n')
+    
+    current_timestamp = None
+    current_prompt = None
+    
+    for line in lines:
+        line = line.strip()
+        if line.startswith('TIMESTAMP:'):
+            if current_timestamp and current_prompt:
+                # Clean timestamp for filename
+                clean_timestamp = re.sub(r'[^\w:,\-_]', '_', current_timestamp)
+                entries.append((clean_timestamp, current_prompt))
+            
+            current_timestamp = line.replace('TIMESTAMP:', '').strip()
+            current_prompt = None
+            
+        elif line.startswith('PROMPT:'):
+            current_prompt = line.replace('PROMPT:', '').strip()
+    
+    # Don't forget the last entry
+    if current_timestamp and current_prompt:
+        clean_timestamp = re.sub(r'[^\w:,\-_]', '_', current_timestamp)
+        entries.append((clean_timestamp, current_prompt))
+    
+    return entries
+
 def process_srt_entries(subtitles: List[Tuple[str, str, str, str]]) -> List[Tuple[str, str]]:
-    """Process SRT entries to use one entry per image with timestamps"""
+    """Fallback function: Process SRT entries to use one entry per image with timestamps"""
     entries = []
     
     for timestamp, start_time, end_time, text in subtitles:
@@ -66,8 +147,6 @@ def process_srt_entries(subtitles: List[Tuple[str, str, str, str]]) -> List[Tupl
             entries.append((clean_timestamp, text))
     
     return entries
-
-def enhance_prompt_for_image_generation(text: str) -> str:
     """Enhance subtitle text to be more suitable for image generation"""
     # Remove common dialogue markers and clean up text
     text = re.sub(r'^\s*-\s*', '', text)  # Remove dialogue dashes
@@ -80,7 +159,7 @@ def enhance_prompt_for_image_generation(text: str) -> str:
     
     return text.strip()
 
-def generate_image(prompt: str, width: int = 512, height: int = 512) -> Image.Image:
+def enhance_prompt_for_image_generation(text: str) -> str:
     """Generate image using Flux model"""
     try:
         output = replicate.run(
@@ -168,11 +247,12 @@ with st.sidebar:
     # Display calculated dimensions
     st.caption(f"Image dimensions: {width} × {height} pixels")
     
-    enable_prompt_enhancement = st.checkbox(
-        "Enhance prompts for better images",
-        value=True,
-        help="Automatically improve subtitle text for image generation"
-    )
+def generate_image(prompt: str, width: int = 512, height: int = 512) -> Image.Image:
+        enable_prompt_enhancement = st.checkbox(
+            "Enhance prompts for better images",
+            value=True,
+            help="Automatically improve subtitle text for image generation"
+        )
 
 # File upload
 uploaded_file = st.file_uploader(
@@ -191,15 +271,23 @@ if uploaded_file is not None:
     else:
         st.success(f"Successfully parsed {len(subtitles)} subtitle entries")
         
-        # Process SRT entries (one per subtitle entry)
-        entries = process_srt_entries(subtitles)
+        # Process SRT entries
+        if use_gemini_processing:
+            st.info("🤖 Using Gemini AI to group subtitles and create enhanced prompts...")
+            entries = group_subtitles_with_gemini(subtitles)
+        else:
+            entries = process_srt_entries(subtitles)
         
-        st.success(f"Found {len(entries)} subtitle entries to process")
+        st.success(f"Found {len(entries)} {'AI-processed groups' if use_gemini_processing else 'subtitle entries'} to process")
         
         # Show preview of all entries
-        with st.expander("Preview All Subtitle Entries"):
+        preview_title = "Preview AI-Processed Groups" if use_gemini_processing else "Preview All Subtitle Entries"
+        with st.expander(preview_title):
             for i, (timestamp, text) in enumerate(entries):
-                st.text(f"{i+1}. [{timestamp}] {text}")
+                if use_gemini_processing:
+                    st.text(f"{i+1}. [{timestamp}] Enhanced prompt: {text}")
+                else:
+                    st.text(f"{i+1}. [{timestamp}] {text}")
         
         if entries:
             # Generate images button
@@ -215,7 +303,13 @@ if uploaded_file is not None:
                     progress_bar.progress((i) / len(entries))
                     
                     # Generate image
-                    prompt = enhance_prompt_for_image_generation(text) if enable_prompt_enhancement else text
+                    if use_gemini_processing:
+                        # Gemini already provided enhanced prompts
+                        prompt = text
+                    else:
+                        # Use traditional enhancement if needed
+                        prompt = enhance_prompt_for_image_generation(text) if enable_prompt_enhancement else text
+                    
                     image = generate_image(prompt, width, height)
                     
                     if image:
@@ -244,8 +338,8 @@ if uploaded_file is not None:
                             st.image(image, use_container_width=True)
                         
                         with col2:
-                            st.write(f"**Original text:** {original_text}")
-                            if enable_prompt_enhancement:
+                            st.write(f"**{'Enhanced prompt' if use_gemini_processing else 'Original text'}:** {original_text}")
+                            if not use_gemini_processing and enable_prompt_enhancement:
                                 with st.expander("Enhanced prompt"):
                                     st.text(prompt)
                             
