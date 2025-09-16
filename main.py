@@ -26,8 +26,8 @@ except:
 
 try:
     gemini_api_key = st.secrets["GEMINI_API_KEY"]
-    client1 = replicate.Client(api_key=gemini_api_key)
-    gemini_model = client1.run('gemini-1.5-flash')
+    genai.configure(api_key)
+    gemini_model = genai.GenerativeModel('gemini-1.5-flash')
 except:
     st.error("Please add GEMINI_API_KEY to your Streamlit secrets")
     st.stop()
