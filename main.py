@@ -299,13 +299,13 @@ if uploaded_file is not None:
                     status_text.text(f"Generating image {i+1} of {len(entries)}...")
                     progress_bar.progress((i) / len(entries))
                     
-                    # Generate image
+                    # Generate image directly with the prompt
                     if use_gemini_processing:
-                        # Gemini already provided enhanced prompts
+                        # Use Gemini enhanced prompts
                         prompt = text
                     else:
-                        # Use traditional enhancement if needed
-                        prompt = enhance_prompt_for_image_generation(text) if enable_prompt_enhancement else text
+                        # Use original subtitle text
+                        prompt = text
                     
                     image = generate_image(prompt, width, height)
                     
@@ -336,9 +336,6 @@ if uploaded_file is not None:
                         
                         with col2:
                             st.write(f"**{'Enhanced prompt' if use_gemini_processing else 'Original text'}:** {original_text}")
-                            if not use_gemini_processing and enable_prompt_enhancement:
-                                with st.expander("Enhanced prompt"):
-                                    st.text(prompt)
                             
                             # Individual download button
                             buf = BytesIO()
