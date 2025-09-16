@@ -171,7 +171,8 @@ st.write("Upload an SRT subtitle file and generate images for each subtitle entr
 use_gemini_processing = st.checkbox(
     "🤖 Use Gemini AI for smart grouping & prompts",
     value=True,
-    help="Use Gemini to group subtitles into complete sentences and create enhanced visual prompts"
+    help="Use Gemini to group subtitles into complete sentences and create enhanced visual prompts",
+    key="gemini_processing"
 )
 
 # Sidebar configuration
