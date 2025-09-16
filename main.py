@@ -54,28 +54,18 @@ def parse_srt(srt_content: str) -> List[Tuple[str, str, str, str]]:
     
     return subtitles
 
-def split_into_sentences(subtitles: List[Tuple[str, str, str, str]]) -> List[Tuple[str, str]]:
-    """Split subtitle text into individual sentences with their timestamps"""
-    sentences = []
+def process_srt_entries(subtitles: List[Tuple[str, str, str, str]]) -> List[Tuple[str, str]]:
+    """Process SRT entries to use one entry per image with timestamps"""
+    entries = []
     
     for timestamp, start_time, end_time, text in subtitles:
-        # Split text into sentences using multiple sentence delimiters
-        sentence_parts = re.split(r'[.!?]+', text)
-        
-        for i, sentence in enumerate(sentence_parts):
-            sentence = sentence.strip()
-            if sentence:  # Only add non-empty sentences
-                # Create a unique timestamp for each sentence
-                if len(sentence_parts) > 2:
-                    sentence_timestamp = f"{start_time}_sentence_{i+1}"
-                else:
-                    sentence_timestamp = start_time
-                
-                # Clean timestamp for filename and display (keep colon format for readability)
-                clean_timestamp = re.sub(r'[^\w:,\-_]', '_', sentence_timestamp)
-                sentences.append((clean_timestamp, sentence))
+        text = text.strip()
+        if text:  # Only add non-empty entries
+            # Clean timestamp for filename and display (keep colon format for readability)
+            clean_timestamp = re.sub(r'[^\w:,\-_]', '_', start_time)
+            entries.append((clean_timestamp, text))
     
-    return sentences
+    return entries
 
 def enhance_prompt_for_image_generation(text: str) -> str:
     """Enhance subtitle text to be more suitable for image generation"""
