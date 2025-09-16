@@ -187,6 +187,7 @@ def generate_image(prompt: str, width: int = 1024, height: int = 574) -> Image.I
             "black-forest-labs/flux-schnell",
             input={
                 "prompt": prompt,
+                "aspect_ratio": 16:9,
                 "width": width,
                 "height": height,
                 "num_outputs": 1,
