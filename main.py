@@ -63,7 +63,7 @@ def group_subtitles_by_two(subtitles: List[Tuple[str, str, str, str]]) -> List[T
     """Group subtitles in pairs of 2 entries"""
     grouped_entries = []
     
-    for i in range(0, len(subtitles), 2):
+    for i in range(0, len(subtitles), 3):
         current = subtitles[i]
         next_subtitle = subtitles[i + 1] if i + 1 < len(subtitles) else None
         
