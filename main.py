@@ -28,6 +28,7 @@ try:
     gemini_api_key = st.secrets["GEMINI_API_KEY"]
     genai.configure(api_key=gemini_api_key)
     gemini_model = genai.GenerativeModel('gemini-1.5-flash')
+    client = genai.Client()
 except:
     st.error("Please add GEMINI_API_KEY to your Streamlit secrets")
     st.stop()
@@ -119,7 +120,7 @@ Output: Two people facing each other in friendly greeting gesture, warm indoor l
 OUTPUT: Return only the optimized scene description for image generation."""
 
     try:
-        response = gemini_model.generate_content(prompt)
+        response = client.generate_content(model="gemini-1.5-flash",prompt)
         description = response.text.strip()
         description = description.strip('"\'')
         return description
