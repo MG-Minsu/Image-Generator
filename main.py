@@ -89,31 +89,40 @@ def process_individual_subtitles(subtitles: List[Tuple[str, str, str, str]]) -> 
     
     return entries
 
-def enhance_prompt_with_gemini(text: str) -> str:
-    """Use Gemini to create an enhanced visual prompt from subtitle text"""
-    prompt = f"""Transform this subtitle text into a cinematic visual description for AI image generation.
+def describe_scene_with_gemini(text: str) -> str:
+    """Use Gemini to describe what's happening in the sentence for visual representation"""
+    prompt = f"""Analyze this subtitle text and describe what is visually happening in the scene.
 
 SUBTITLE TEXT: "{text}"
 
-REQUIREMENTS:
-- Create a visual scene description (10-20 words)
-- Focus on what can be SEEN, not dialogue
-- Include setting, mood, actions, lighting if relevant
-- Make it cinematic and descriptive
-- Avoid quotes or dialogue text
+TASK: Describe what is visually occurring in this moment. Focus on:
+- What actions are taking place
+- What the setting/environment looks like  
+- Who is present in the scene
+- What objects or elements are visible
+- The mood or atmosphere
 
-OUTPUT: Just return the enhanced visual description, nothing else.
+RULES:
+- Write 15-25 words describing the visual scene
+- Focus on what a camera would capture
+- Be specific about actions, settings, and visual elements
+- Don't just repeat the dialogue - interpret the scene
+- Use cinematic language
 
-Example input: "Hello there. How are you doing today?"
-Example output: Two people having a friendly conversation in a bright, comfortable living room"""
+EXAMPLE:
+Input: "Hello, how are you today?"
+Output: Two people meeting and greeting each other warmly in a comfortable indoor setting with natural lighting
+
+OUTPUT: Return only the scene description, nothing else."""
 
     try:
         response = gemini_model.generate_content(prompt)
-        enhanced = response.text.strip()
-        enhanced = enhanced.strip('"\'')
-        return enhanced
+        description = response.text.strip()
+        description = description.strip('"\'')
+        return description
     except Exception as e:
-        return text
+        # Fallback to original text if Gemini fails
+        return f"A scene depicting: {text}"
 
 def generate_image(prompt: str, width: int = 512, height: int = 512) -> Image.Image:
     """Generate image using Flux model"""
@@ -140,23 +149,32 @@ def generate_image(prompt: str, width: int = 512, height: int = 512) -> Image.Im
 
 # App title and description
 st.title("🎬 SRT Image Generator")
-st.write("Upload an SRT subtitle file and generate images")
+st.write("Upload an SRT subtitle file and generate images with Gemini scene descriptions")
 
-# Main configuration
-col1, col2 = st.columns([1, 1])
+# Configuration
+st.subheader("⚙️ Configuration")
+
+col1, col2 = st.columns(2)
 with col1:
-    processing_mode = st.selectbox(
-        "Processing Mode",
-        ["Gemini Enhanced (Group by 2)", "Individual Subtitles"],
-        help="Choose how to process your subtitles"
+    grouping_mode = st.selectbox(
+        "Subtitle Grouping",
+        ["Group by 2 subtitles", "Individual subtitles"],
+        help="How to group your subtitle entries"
     )
 
-# Sidebar configuration
+with col2:
+    use_gemini_description = st.selectbox(
+        "Scene Description",
+        ["Use Gemini to describe scenes", "Use original subtitle text"],
+        help="How to create image prompts"
+    )
+
+# Sidebar for image settings
 with st.sidebar:
-    st.header("Image Settings")
+    st.header("🖼️ Image Settings")
     
     aspect_ratio = st.selectbox(
-        "Select Aspect Ratio *",
+        "Aspect Ratio",
         ["16:9 (Widescreen)", "1:1 (Square)", "4:3 (Classic)", "3:4 (Portrait)", "9:16 (Vertical)"],
         help="Choose the aspect ratio for generated images"
     )
@@ -198,117 +216,161 @@ with st.sidebar:
             return base_size, base_size
     
     width, height = get_dimensions(aspect_ratio, size_option)
-    st.caption(f"Image dimensions: {width} × {height} pixels")
+    st.caption(f"📐 Image dimensions: {width} × {height} pixels")
+
+st.divider()
 
 # File upload
+st.subheader("📁 Upload SRT File")
 uploaded_file = st.file_uploader(
-    "Upload SRT file",
+    "Choose your SRT file",
     type=['srt'],
     help="Upload a subtitle file (.srt format)"
 )
 
 if uploaded_file is not None:
+    # Parse SRT file
     srt_content = uploaded_file.read().decode('utf-8')
     subtitles = parse_srt(srt_content)
     
     if not subtitles:
-        st.error("Could not parse any subtitles from the uploaded file. Please check the SRT format.")
+        st.error("❌ Could not parse any subtitles from the uploaded file. Please check the SRT format.")
     else:
-        st.success(f"Successfully parsed {len(subtitles)} subtitle entries")
+        st.success(f"✅ Successfully parsed {len(subtitles)} subtitle entries")
         
-        # Process based on selected mode
-        use_gemini = processing_mode.startswith("Gemini Enhanced")
+        # Process subtitles based on grouping mode
+        st.subheader("📝 Processing Subtitles")
         
-        if use_gemini:
-            st.info("🤖 Grouping subtitles by 2 and using Gemini AI to create enhanced prompts...")
-            grouped_entries = group_subtitles_by_two(subtitles)
-            
-            entries = []
-            progress_bar = st.progress(0)
-            for i, (timestamp, combined_text) in enumerate(grouped_entries):
-                progress_bar.progress(i / len(grouped_entries))
-                enhanced_prompt = enhance_prompt_with_gemini(combined_text)
-                entries.append((timestamp, enhanced_prompt))
-            progress_bar.progress(1.0)
-            st.success("✅ Gemini enhancement complete!")
-            
+        if grouping_mode.startswith("Group by 2"):
+            st.info("👥 Grouping subtitles by pairs of 2...")
+            processed_entries = group_subtitles_by_two(subtitles)
         else:
-            entries = process_individual_subtitles(subtitles)
+            st.info("📄 Processing each subtitle individually...")
+            processed_entries = process_individual_subtitles(subtitles)
         
-        st.success(f"Found {len(entries)} entries to process")
+        st.write(f"**Processed entries:** {len(processed_entries)}")
         
-        # Show preview
-        preview_title = "Preview Enhanced Entries" if use_gemini else "Preview Subtitle Entries"
-        with st.expander(preview_title):
-            for i, (timestamp, text) in enumerate(entries):
-                prefix = "Enhanced:" if use_gemini else "Text:"
-                st.text(f"{i+1}. [{timestamp}] {prefix} {text}")
+        # Show preview of processed entries
+        with st.expander("👀 Preview Processed Entries"):
+            for i, (timestamp, text) in enumerate(processed_entries[:10]):  # Show first 10
+                st.text(f"{i+1}. [{timestamp}] {text}")
+            if len(processed_entries) > 10:
+                st.text(f"... and {len(processed_entries) - 10} more entries")
         
-        if entries:
-            if st.button("🎨 Generate All Images", type="primary"):
+        # Create scene descriptions
+        st.subheader("🎭 Scene Descriptions")
+        
+        if use_gemini_description.startswith("Use Gemini"):
+            st.info("🤖 Using Gemini to create scene descriptions...")
+            
+            # Create descriptions with progress tracking
+            scene_descriptions = []
+            progress_container = st.container()
+            
+            with progress_container:
                 progress_bar = st.progress(0)
                 status_text = st.empty()
                 
-                generated_images = []
-                image_data_for_download = []
-                
-                for i, (timestamp, text) in enumerate(entries):
-                    status_text.text(f"Generating image {i+1} of {len(entries)}...")
-                    progress_bar.progress((i) / len(entries))
+                for i, (timestamp, text) in enumerate(processed_entries):
+                    status_text.text(f"Creating description {i+1} of {len(processed_entries)}...")
+                    progress_bar.progress(i / len(processed_entries))
                     
-                    image = generate_image(text, width, height)
-                    
-                    if image:
-                        generated_images.append((image, text, timestamp))
-                        
-                        buf = BytesIO()
-                        image.save(buf, format='PNG')
-                        filename = f"{timestamp}.png"
-                        image_data_for_download.append((buf.getvalue(), filename))
+                    description = describe_scene_with_gemini(text)
+                    scene_descriptions.append((timestamp, text, description))
                 
                 progress_bar.progress(1.0)
-                status_text.text("All images generated!")
+                status_text.text("✅ All scene descriptions created!")
+            
+        else:
+            st.info("📝 Using original subtitle text...")
+            scene_descriptions = [(timestamp, text, text) for timestamp, text in processed_entries]
+        
+        # Show preview of scene descriptions
+        with st.expander("🎬 Preview Scene Descriptions"):
+            for i, (timestamp, original, description) in enumerate(scene_descriptions[:10]):
+                st.write(f"**{i+1}. [{timestamp}]**")
+                st.write(f"*Original:* {original}")
+                st.write(f"*Description:* {description}")
+                st.write("---")
+            if len(scene_descriptions) > 10:
+                st.text(f"... and {len(scene_descriptions) - 10} more descriptions")
+        
+        # Generate images
+        st.subheader("🎨 Generate Images")
+        
+        if st.button("🚀 Generate All Images", type="primary", use_container_width=True):
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            
+            generated_images = []
+            image_data_for_download = []
+            
+            for i, (timestamp, original_text, description) in enumerate(scene_descriptions):
+                status_text.text(f"Generating image {i+1} of {len(scene_descriptions)}...")
+                progress_bar.progress(i / len(scene_descriptions))
                 
-                if generated_images:
-                    st.subheader("Generated Images")
+                # Use the scene description as the prompt
+                image = generate_image(description, width, height)
+                
+                if image:
+                    generated_images.append((image, description, original_text, timestamp))
                     
-                    for i, (image, prompt, timestamp) in enumerate(generated_images):
-                        st.markdown(f"### Image {i+1}: `{timestamp}`")
-                        
-                        col1, col2 = st.columns([2, 1])
-                        
-                        with col1:
-                            st.image(image, use_container_width=True)
-                        
-                        with col2:
-                            label = "Enhanced prompt:" if use_gemini else "Original text:"
-                            st.write(f"**{label}** {prompt}")
-                            
-                            buf = BytesIO()
-                            image.save(buf, format='PNG')
-                            st.download_button(
-                                label=f"Download",
-                                data=buf.getvalue(),
-                                file_name=f"{timestamp}.png",
-                                mime="image/png",
-                                key=f"download_{i}_{timestamp}"
-                            )
-                        
-                        st.divider()
+                    buf = BytesIO()
+                    image.save(buf, format='PNG')
+                    filename = f"{timestamp}.png"
+                    image_data_for_download.append((buf.getvalue(), filename))
+            
+            progress_bar.progress(1.0)
+            status_text.text("🎉 All images generated!")
+            
+            # Display generated images
+            if generated_images:
+                st.subheader("🖼️ Generated Images")
+                
+                for i, (image, description, original_text, timestamp) in enumerate(generated_images):
+                    st.markdown(f"### 🎬 Image {i+1}: `{timestamp}`")
                     
-                    if len(image_data_for_download) > 1:
-                        zip_buffer = BytesIO()
-                        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-                            for img_data, filename in image_data_for_download:
-                                zip_file.writestr(filename, img_data)
+                    col1, col2 = st.columns([3, 2])
+                    
+                    with col1:
+                        st.image(image, use_container_width=True)
+                    
+                    with col2:
+                        st.write("**📝 Original Subtitle:**")
+                        st.write(original_text)
+                        st.write("**🎭 Scene Description:**")
+                        st.write(description)
                         
+                        # Download button
+                        buf = BytesIO()
+                        image.save(buf, format='PNG')
                         st.download_button(
-                            label="📦 Download All Images (ZIP)",
-                            data=zip_buffer.getvalue(),
-                            file_name="srt_generated_images.zip",
-                            mime="application/zip",
-                            key="download_all_images"
+                            label="💾 Download Image",
+                            data=buf.getvalue(),
+                            file_name=f"{timestamp}.png",
+                            mime="image/png",
+                            key=f"download_{i}_{timestamp}",
+                            use_container_width=True
                         )
+                    
+                    st.divider()
+                
+                # Bulk download
+                if len(image_data_for_download) > 1:
+                    st.subheader("📦 Bulk Download")
+                    zip_buffer = BytesIO()
+                    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+                        for img_data, filename in image_data_for_download:
+                            zip_file.writestr(filename, img_data)
+                    
+                    st.download_button(
+                        label="📦 Download All Images (ZIP)",
+                        data=zip_buffer.getvalue(),
+                        file_name="srt_generated_images.zip",
+                        mime="application/zip",
+                        key="download_all_images",
+                        use_container_width=True
+                    )
 
 st.markdown("---")
-st.markdown("Built with Streamlit 🚀 | Powered by Flux AI")
+st.markdown("🚀 **Built with Streamlit** | 🤖 **Powered by Flux AI & Gemini**")
