@@ -6,7 +6,8 @@ from io import BytesIO
 import re
 from typing import List, Tuple
 import zipfile
-import google as genai
+import google
+import google.generativeai as genai
 
 # Set page config
 st.set_page_config(
