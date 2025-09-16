@@ -33,7 +33,6 @@ except:
 
 def parse_srt(srt_content: str) -> List[Tuple[str, str, str, str]]:
     """Parse SRT content and return list of (timestamp, start_time, end_time, text) tuples"""
-    # Split by double newlines to get individual subtitle blocks
     blocks = re.split(r'\n\s*\n', srt_content.strip())
     
     subtitles = []
@@ -43,14 +42,10 @@ def parse_srt(srt_content: str) -> List[Tuple[str, str, str, str]]:
             
         lines = block.strip().split('\n')
         if len(lines) >= 3:
-            # First line is the sequence number (we'll skip this)
             seq_num = lines[0].strip()
-            # Second line is the timestamp
             timestamp = lines[1].strip()
-            # Remaining lines are the subtitle text
             text = ' '.join(lines[2:]).strip()
             
-            # Extract start and end times
             if ' --> ' in timestamp:
                 start_time, end_time = timestamp.split(' --> ')
                 start_time = start_time.strip()
@@ -68,22 +63,31 @@ def group_subtitles_by_two(subtitles: List[Tuple[str, str, str, str]]) -> List[T
     grouped_entries = []
     
     for i in range(0, len(subtitles), 2):
-        # Get current subtitle and next one (if exists)
         current = subtitles[i]
         next_subtitle = subtitles[i + 1] if i + 1 < len(subtitles) else None
         
-        # Use timestamp from first subtitle
-        timestamp = current[1]  # start_time
+        timestamp = current[1]
         clean_timestamp = re.sub(r'[^\w:,\-_]', '_', timestamp)
         
-        # Combine text from both subtitles
-        combined_text = current[3].strip()  # text from first subtitle
+        combined_text = current[3].strip()
         if next_subtitle:
             combined_text += " " + next_subtitle[3].strip()
         
         grouped_entries.append((clean_timestamp, combined_text))
     
     return grouped_entries
+
+def process_individual_subtitles(subtitles: List[Tuple[str, str, str, str]]) -> List[Tuple[str, str]]:
+    """Process each subtitle individually"""
+    entries = []
+    
+    for timestamp, start_time, end_time, text in subtitles:
+        text = text.strip()
+        if text:
+            clean_timestamp = re.sub(r'[^\w:,\-_]', '_', start_time)
+            entries.append((clean_timestamp, text))
+    
+    return entries
 
 def enhance_prompt_with_gemini(text: str) -> str:
     """Use Gemini to create an enhanced visual prompt from subtitle text"""
@@ -106,44 +110,18 @@ Example output: Two people having a friendly conversation in a bright, comfortab
     try:
         response = gemini_model.generate_content(prompt)
         enhanced = response.text.strip()
-        # Remove quotes if Gemini added them
         enhanced = enhanced.strip('"\'')
         return enhanced
     except Exception as e:
-        # Fallback to original text if Gemini fails
         return text
 
-def process_srt_entries(subtitles: List[Tuple[str, str, str, str]]) -> List[Tuple[str, str]]:
-    """Fallback function: Process SRT entries to use one entry per image with timestamps"""
-    entries = []
-    
-    for timestamp, start_time, end_time, text in subtitles:
-        text = text.strip()
-        if text:  # Only add non-empty entries
-            # Clean timestamp for filename and display (keep colon format for readability)
-            clean_timestamp = re.sub(r'[^\w:,\-_]', '_', start_time)
-            entries.append((clean_timestamp, text))
-    
-    return entries
-    """Enhance subtitle text to be more suitable for image generation"""
-    # Remove common dialogue markers and clean up text
-    text = re.sub(r'^\s*-\s*', '', text)  # Remove dialogue dashes
-    text = re.sub(r'\[.*?\]', '', text)   # Remove sound effects in brackets
-    text = re.sub(r'\(.*?\)', '', text)   # Remove parenthetical notes
-    
-    # Add visual descriptive context if the text seems too dialogue-heavy
-    if len(text.split()) < 5 or any(word in text.lower() for word in ['said', 'says', 'told', 'asked']):
-        text = f"A cinematic scene depicting: {text}"
-    
-    return text.strip()
-
-def enhance_prompt_for_image_generation(text: str) -> str:
+def generate_image(prompt: str, width: int = 512, height: int = 512) -> Image.Image:
     """Generate image using Flux model"""
     try:
         output = replicate.run(
             "black-forest-labs/flux-schnell",
             input={
-                "prompt": enhance_prompt_for_image_generation(prompt),
+                "prompt": prompt,
                 "width": width,
                 "height": height,
                 "num_outputs": 1,
@@ -151,10 +129,7 @@ def enhance_prompt_for_image_generation(text: str) -> str:
             }
         )
         
-        # Get the image URL
         image_url = output[0] if isinstance(output, list) else output
-        
-        # Download image
         response = requests.get(image_url)
         image = Image.open(BytesIO(response.content))
         
@@ -165,30 +140,27 @@ def enhance_prompt_for_image_generation(text: str) -> str:
 
 # App title and description
 st.title("🎬 SRT Image Generator")
-st.write("Upload an SRT subtitle file and generate images for each subtitle entry")
+st.write("Upload an SRT subtitle file and generate images")
 
-# Processing options
-use_gemini_processing = st.checkbox(
-    "🤖 Use Gemini AI for smart grouping & prompts",
-    value=True,
-    help="Use Gemini to group subtitles into complete sentences and create enhanced visual prompts",
-    key="gemini_processing"
-)
+# Main configuration
+col1, col2 = st.columns([1, 1])
+with col1:
+    processing_mode = st.selectbox(
+        "Processing Mode",
+        ["Gemini Enhanced (Group by 2)", "Individual Subtitles"],
+        help="Choose how to process your subtitles"
+    )
 
 # Sidebar configuration
 with st.sidebar:
-    st.header("Configuration")
+    st.header("Image Settings")
     
-    st.subheader("Image Settings")
-    
-    # Aspect ratio selection (user must choose)
     aspect_ratio = st.selectbox(
         "Select Aspect Ratio *",
         ["16:9 (Widescreen)", "1:1 (Square)", "4:3 (Classic)", "3:4 (Portrait)", "9:16 (Vertical)"],
         help="Choose the aspect ratio for generated images"
     )
     
-    # Size selection
     size_option = st.selectbox(
         "Image Size",
         ["Small (512px)", "Medium (768px)", "Large (1024px)"],
@@ -196,17 +168,14 @@ with st.sidebar:
         help="Choose the base size for images"
     )
     
-    # Calculate actual dimensions based on ratio and size
     def get_dimensions(ratio_text, size_text):
-        # Extract base size
         if "512" in size_text:
             base_size = 512
         elif "768" in size_text:
             base_size = 768
-        else:  # 1024
+        else:
             base_size = 1024
         
-        # Calculate width and height based on ratio
         if "1:1" in ratio_text:
             return base_size, base_size
         elif "16:9" in ratio_text:
@@ -229,16 +198,7 @@ with st.sidebar:
             return base_size, base_size
     
     width, height = get_dimensions(aspect_ratio, size_option)
-    
-    # Display calculated dimensions
     st.caption(f"Image dimensions: {width} × {height} pixels")
-    
-def generate_image(prompt: str, width: int = 512, height: int = 512) -> Image.Image:
-        enable_prompt_enhancement = st.checkbox(
-            "Enhance prompts for better images",
-            value=True,
-            help="Automatically improve subtitle text for image generation"
-        )
 
 # File upload
 uploaded_file = st.file_uploader(
@@ -248,7 +208,6 @@ uploaded_file = st.file_uploader(
 )
 
 if uploaded_file is not None:
-    # Read and parse SRT file
     srt_content = uploaded_file.read().decode('utf-8')
     subtitles = parse_srt(srt_content)
     
@@ -257,13 +216,13 @@ if uploaded_file is not None:
     else:
         st.success(f"Successfully parsed {len(subtitles)} subtitle entries")
         
-        # Process SRT entries
-        if use_gemini_processing:
+        # Process based on selected mode
+        use_gemini = processing_mode.startswith("Gemini Enhanced")
+        
+        if use_gemini:
             st.info("🤖 Grouping subtitles by 2 and using Gemini AI to create enhanced prompts...")
-            # First group by 2
             grouped_entries = group_subtitles_by_two(subtitles)
             
-            # Then enhance each grouped entry with Gemini
             entries = []
             progress_bar = st.progress(0)
             for i, (timestamp, combined_text) in enumerate(grouped_entries):
@@ -272,22 +231,20 @@ if uploaded_file is not None:
                 entries.append((timestamp, enhanced_prompt))
             progress_bar.progress(1.0)
             st.success("✅ Gemini enhancement complete!")
+            
         else:
-            entries = process_srt_entries(subtitles)
+            entries = process_individual_subtitles(subtitles)
         
-        st.success(f"Found {len(entries)} {'grouped & enhanced entries' if use_gemini_processing else 'subtitle entries'} to process")
+        st.success(f"Found {len(entries)} entries to process")
         
-        # Show preview of all entries
-        preview_title = "Preview Grouped & Enhanced Entries" if use_gemini_processing else "Preview All Subtitle Entries"
+        # Show preview
+        preview_title = "Preview Enhanced Entries" if use_gemini else "Preview Subtitle Entries"
         with st.expander(preview_title):
             for i, (timestamp, text) in enumerate(entries):
-                if use_gemini_processing:
-                    st.text(f"{i+1}. [{timestamp}] Enhanced: {text}")
-                else:
-                    st.text(f"{i+1}. [{timestamp}] {text}")
+                prefix = "Enhanced:" if use_gemini else "Text:"
+                st.text(f"{i+1}. [{timestamp}] {prefix} {text}")
         
         if entries:
-            # Generate images button
             if st.button("🎨 Generate All Images", type="primary"):
                 progress_bar = st.progress(0)
                 status_text = st.empty()
@@ -299,20 +256,11 @@ if uploaded_file is not None:
                     status_text.text(f"Generating image {i+1} of {len(entries)}...")
                     progress_bar.progress((i) / len(entries))
                     
-                    # Generate image directly with the prompt
-                    if use_gemini_processing:
-                        # Use Gemini enhanced prompts
-                        prompt = text
-                    else:
-                        # Use original subtitle text
-                        prompt = text
-                    
-                    image = generate_image(prompt, width, height)
+                    image = generate_image(text, width, height)
                     
                     if image:
-                        generated_images.append((image, prompt, timestamp, text))
+                        generated_images.append((image, text, timestamp))
                         
-                        # Save image data for download with timestamp as filename
                         buf = BytesIO()
                         image.save(buf, format='PNG')
                         filename = f"{timestamp}.png"
@@ -321,12 +269,10 @@ if uploaded_file is not None:
                 progress_bar.progress(1.0)
                 status_text.text("All images generated!")
                 
-                # Display generated images
                 if generated_images:
                     st.subheader("Generated Images")
                     
-                    # Display images in a grid
-                    for i, (image, prompt, timestamp, original_text) in enumerate(generated_images):
+                    for i, (image, prompt, timestamp) in enumerate(generated_images):
                         st.markdown(f"### Image {i+1}: `{timestamp}`")
                         
                         col1, col2 = st.columns([2, 1])
@@ -335,9 +281,9 @@ if uploaded_file is not None:
                             st.image(image, use_container_width=True)
                         
                         with col2:
-                            st.write(f"**{'Enhanced prompt' if use_gemini_processing else 'Original text'}:** {original_text}")
+                            label = "Enhanced prompt:" if use_gemini else "Original text:"
+                            st.write(f"**{label}** {prompt}")
                             
-                            # Individual download button
                             buf = BytesIO()
                             image.save(buf, format='PNG')
                             st.download_button(
@@ -345,12 +291,11 @@ if uploaded_file is not None:
                                 data=buf.getvalue(),
                                 file_name=f"{timestamp}.png",
                                 mime="image/png",
-                                key=f"download_{timestamp}"
+                                key=f"download_{i}_{timestamp}"
                             )
                         
                         st.divider()
                     
-                    # Create ZIP file for bulk download
                     if len(image_data_for_download) > 1:
                         zip_buffer = BytesIO()
                         with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
@@ -362,7 +307,7 @@ if uploaded_file is not None:
                             data=zip_buffer.getvalue(),
                             file_name="srt_generated_images.zip",
                             mime="application/zip",
-                            key="download_all"
+                            key="download_all_images"
                         )
 
 st.markdown("---")
