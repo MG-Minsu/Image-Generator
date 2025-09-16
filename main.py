@@ -124,9 +124,61 @@ OUTPUT: Return only the optimized scene description for image generation."""
         description = description.strip('"\'')
         return description
     except Exception as e:
-        st.warning(f"Gemini API error: {str(e)}. Using fallback description.")
-        # Fallback to original text if Gemini fails
-        return f"A cinematic scene depicting: {text}"
+        error_msg = str(e)
+        if "429" in error_msg or "quota" in error_msg.lower():
+            st.warning("⚠️ Gemini API quota exceeded. Using enhanced fallback descriptions.")
+            return create_enhanced_fallback_description(text)
+        else:
+            st.warning(f"Gemini API error: {error_msg}. Using fallback description.")
+            return create_enhanced_fallback_description(text)
+
+def create_enhanced_fallback_description(text: str) -> str:
+    """Create better fallback descriptions when Gemini API is unavailable"""
+    text_lower = text.lower()
+    
+    # Simple keyword-based scene enhancement
+    scene_elements = []
+    
+    # Detect dialogue vs action
+    if any(word in text_lower for word in ['said', 'says', 'asked', 'replied', 'whispered', 'shouted']):
+        scene_elements.append("people in conversation")
+    elif any(word in text_lower for word in ['running', 'walking', 'moving', 'going', 'coming']):
+        scene_elements.append("person in motion")
+    elif any(word in text_lower for word in ['looking', 'watching', 'seeing', 'staring']):
+        scene_elements.append("focused gaze and observation")
+    else:
+        scene_elements.append("cinematic scene")
+    
+    # Detect setting clues
+    if any(word in text_lower for word in ['house', 'home', 'room', 'kitchen', 'bedroom']):
+        scene_elements.append("indoor domestic setting")
+    elif any(word in text_lower for word in ['office', 'work', 'desk', 'meeting']):
+        scene_elements.append("professional office environment")
+    elif any(word in text_lower for word in ['outside', 'street', 'park', 'car', 'road']):
+        scene_elements.append("outdoor urban environment")
+    elif any(word in text_lower for word in ['forest', 'tree', 'nature', 'mountain']):
+        scene_elements.append("natural outdoor setting")
+    else:
+        scene_elements.append("atmospheric lighting")
+    
+    # Detect emotional tone
+    if any(word in text_lower for word in ['happy', 'laugh', 'smile', 'joy']):
+        scene_elements.append("warm positive mood")
+    elif any(word in text_lower for word in ['sad', 'cry', 'tear', 'worried']):
+        scene_elements.append("somber emotional atmosphere")
+    elif any(word in text_lower for word in ['angry', 'mad', 'fight', 'argue']):
+        scene_elements.append("tense dramatic lighting")
+    else:
+        scene_elements.append("natural realistic lighting")
+    
+    # Add cinematic quality
+    scene_elements.append("cinematic composition")
+    scene_elements.append("professional photography")
+    
+    # Combine elements
+    description = f"A {', '.join(scene_elements[:4])}, depicting: {text}"
+    
+    return description
 
 def generate_image(prompt: str, width: int = 512, height: int = 512) -> Image.Image:
     """Generate image using Flux model"""
@@ -198,6 +250,13 @@ with st.sidebar:
         max_value=50,
         value=10,
         help="Limit the number of images to generate (to prevent excessive API usage)"
+    )
+    
+    # Option to disable Gemini if quota exceeded
+    st.markdown("---")
+    force_fallback = st.checkbox(
+        "🔧 Use Enhanced Fallback Descriptions Only",
+        help="Skip Gemini API calls and use smart keyword-based descriptions instead"
     )
     
     def get_dimensions(ratio_text, size_text):
@@ -292,7 +351,7 @@ if uploaded_file is not None:
         # Create scene descriptions
         st.subheader("🎭 Scene Descriptions")
         
-        if use_gemini_description.startswith("Use Gemini"):
+        if use_gemini_description.startswith("Use Gemini") and not force_fallback:
             st.info("🤖 Using Gemini to create optimized scene descriptions for image generation...")
             
             # Create descriptions with progress tracking
@@ -312,6 +371,13 @@ if uploaded_file is not None:
                 
                 progress_bar.progress(1.0)
                 status_text.text("✅ All optimized scene descriptions created!")
+        
+        elif force_fallback:
+            st.info("🔧 Using enhanced fallback descriptions (Gemini API disabled)...")
+            scene_descriptions = []
+            for timestamp, text in processed_entries:
+                description = create_enhanced_fallback_description(text)
+                scene_descriptions.append((timestamp, text, description))
             
         else:
             st.info("📝 Using original subtitle text...")
