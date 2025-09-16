@@ -60,21 +60,28 @@ def parse_srt(srt_content: str) -> List[Tuple[str, str, str, str]]:
     return subtitles
 
 def group_subtitles_by_two(subtitles: List[Tuple[str, str, str, str]]) -> List[Tuple[str, str]]:
-    """Group subtitles in pairs of 2 entries"""
+    """Group subtitles in sets of 30 entries"""
     grouped_entries = []
     
     for i in range(0, len(subtitles), 30):
-        current = subtitles[i]
-        next_subtitle = subtitles[i + 1] if i + 1 < len(subtitles) else None
+        # Get up to 30 subtitles starting from index i
+        group = subtitles[i:i+30]
         
-        timestamp = current[1]
+        # Use the first subtitle's timestamp for the group
+        timestamp = group[0][1]
         clean_timestamp = re.sub(r'[^\w:,\-_]', '_', timestamp)
         
-        combined_text = current[3].strip()
-        if next_subtitle:
-            combined_text += " " + next_subtitle[3].strip()
+        # Combine text from all subtitles in the group
+        combined_text_parts = []
+        for subtitle in group:
+            text = subtitle[3].strip()
+            if text:  # Only add non-empty text
+                combined_text_parts.append(text)
         
-        grouped_entries.append((clean_timestamp, combined_text))
+        combined_text = " ".join(combined_text_parts)
+        
+        if combined_text:  # Only add if there's actual content
+            grouped_entries.append((clean_timestamp, combined_text))
     
     return grouped_entries
 
