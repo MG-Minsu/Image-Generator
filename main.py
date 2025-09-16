@@ -343,9 +343,13 @@ if uploaded_file is not None:
         
         # Show preview of processed entries
         with st.expander("👀 Preview Processed Entries"):
-            for i, (timestamp, text) in enumerate(processed_entries[:10]):  # Show first 10
+            show_all_entries = st.checkbox("Show all entries", key="show_all_processed")
+            entries_to_show = processed_entries if show_all_entries else processed_entries[:10]
+            
+            for i, (timestamp, text) in enumerate(entries_to_show):
                 st.text(f"{i+1}. [{timestamp}] {text}")
-            if len(processed_entries) > 10:
+            
+            if not show_all_entries and len(processed_entries) > 10:
                 st.text(f"... and {len(processed_entries) - 10} more entries")
         
         # Create scene descriptions
@@ -385,12 +389,16 @@ if uploaded_file is not None:
         
         # Show preview of scene descriptions
         with st.expander("🎬 Preview Scene Descriptions"):
-            for i, (timestamp, original, description) in enumerate(scene_descriptions[:5]):  # Show first 5
+            show_all_descriptions = st.checkbox("Show all descriptions", key="show_all_descriptions")
+            descriptions_to_show = scene_descriptions if show_all_descriptions else scene_descriptions[:5]
+            
+            for i, (timestamp, original, description) in enumerate(descriptions_to_show):
                 st.write(f"**{i+1}. [{timestamp}]**")
                 st.write(f"*Original:* {original}")
                 st.write(f"*Scene Description:* {description}")
                 st.write("---")
-            if len(scene_descriptions) > 5:
+            
+            if not show_all_descriptions and len(scene_descriptions) > 5:
                 st.text(f"... and {len(scene_descriptions) - 5} more descriptions")
         
         # Generate images
