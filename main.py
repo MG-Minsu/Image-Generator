@@ -27,7 +27,7 @@ except:
 try:
     gemini_api_key = st.secrets["GEMINI_API_KEY"]
     genai.configure(api_key=gemini_api_key)
-    gemini_model = genai.GenerativeModel('gemini-2.0-flash')
+    gemini_model = genai.GenerativeModel('gemini-1.5-flash')
 except:
     st.error("Please add GEMINI_API_KEY to your Streamlit secrets")
     st.stop()
@@ -260,6 +260,7 @@ with st.sidebar:
     )
     
     def get_dimensions(ratio_text, size_text):
+        # Get base size
         if "512" in size_text:
             base_size = 512
         elif "768" in size_text:
@@ -267,27 +268,49 @@ with st.sidebar:
         else:
             base_size = 1024
         
-        # Ensure dimensions are divisible by 16 for Flux
+        # Calculate dimensions based on aspect ratio
         if "1:1" in ratio_text:
+            # Square
             width = height = base_size
         elif "16:9" in ratio_text:
-            width = base_size
-            height = int(base_size * 9 / 16)
+            # Widescreen - width is longer
+            if base_size == 512:
+                width, height = 1024, 576
+            elif base_size == 768:
+                width, height = 1152, 648
+            else:  # 1024
+                width, height = 1152, 648
         elif "4:3" in ratio_text:
-            width = base_size
-            height = int(base_size * 3 / 4)
+            # Classic - width is longer
+            if base_size == 512:
+                width, height = 768, 576
+            elif base_size == 768:
+                width, height = 1024, 768
+            else:  # 1024
+                width, height = 1024, 768
         elif "3:4" in ratio_text:
-            width = int(base_size * 3 / 4)
-            height = base_size
+            # Portrait - height is longer
+            if base_size == 512:
+                width, height = 576, 768
+            elif base_size == 768:
+                width, height = 768, 1024
+            else:  # 1024
+                width, height = 768, 1024
         elif "9:16" in ratio_text:
-            width = int(base_size * 9 / 16)
-            height = base_size
+            # Vertical - height is longer
+            if base_size == 512:
+                width, height = 576, 1024
+            elif base_size == 768:
+                width, height = 648, 1152
+            else:  # 1024
+                width, height = 648, 1152
         else:
+            # Default to square
             width = height = base_size
         
-        # Round to nearest multiple of 16
-        width = (width // 16) * 16
-        height = (height // 16) * 16
+        # Ensure dimensions are multiples of 16 (required by Flux)
+        width = max(512, (width // 16) * 16)
+        height = max(512, (height // 16) * 16)
         
         return width, height
     
