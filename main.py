@@ -108,7 +108,7 @@ def generate_image(prompt: str, width: int = 512, height: int = 512) -> Image.Im
 
 # App title and description
 st.title("🎬 SRT Image Generator")
-st.write("Upload an SRT subtitle file and generate images for each sentence")
+st.write("Upload an SRT subtitle file and generate images for each subtitle entry")
 
 # Sidebar configuration
 with st.sidebar:
@@ -173,8 +173,6 @@ with st.sidebar:
         value=True,
         help="Automatically improve subtitle text for image generation"
     )
-    
-
 
 # File upload
 uploaded_file = st.file_uploader(
@@ -193,17 +191,17 @@ if uploaded_file is not None:
     else:
         st.success(f"Successfully parsed {len(subtitles)} subtitle entries")
         
-        # Split into sentences
-        sentences = split_into_sentences(subtitles)
+        # Process SRT entries (one per subtitle entry)
+        entries = process_srt_entries(subtitles)
         
-        st.success(f"Found {len(sentences)} sentences to process")
+        st.success(f"Found {len(entries)} subtitle entries to process")
         
-        # Show preview of all sentences
-        with st.expander("Preview All Sentences"):
-            for i, (timestamp, sentence) in enumerate(sentences):
-                st.text(f"{i+1}. [{timestamp}] {sentence}")
+        # Show preview of all entries
+        with st.expander("Preview All Subtitle Entries"):
+            for i, (timestamp, text) in enumerate(entries):
+                st.text(f"{i+1}. [{timestamp}] {text}")
         
-        if sentences:
+        if entries:
             # Generate images button
             if st.button("🎨 Generate All Images", type="primary"):
                 progress_bar = st.progress(0)
@@ -212,16 +210,16 @@ if uploaded_file is not None:
                 generated_images = []
                 image_data_for_download = []
                 
-                for i, (timestamp, sentence) in enumerate(sentences):
-                    status_text.text(f"Generating image {i+1} of {len(sentences)}...")
-                    progress_bar.progress((i) / len(sentences))
+                for i, (timestamp, text) in enumerate(entries):
+                    status_text.text(f"Generating image {i+1} of {len(entries)}...")
+                    progress_bar.progress((i) / len(entries))
                     
                     # Generate image
-                    prompt = enhance_prompt_for_image_generation(sentence) if enable_prompt_enhancement else sentence
+                    prompt = enhance_prompt_for_image_generation(text) if enable_prompt_enhancement else text
                     image = generate_image(prompt, width, height)
                     
                     if image:
-                        generated_images.append((image, prompt, timestamp, sentence))
+                        generated_images.append((image, prompt, timestamp, text))
                         
                         # Save image data for download with timestamp as filename
                         buf = BytesIO()
@@ -278,8 +276,6 @@ if uploaded_file is not None:
                             mime="application/zip",
                             key="download_all"
                         )
-
-
 
 st.markdown("---")
 st.markdown("Built with Streamlit 🚀 | Powered by Flux AI")
