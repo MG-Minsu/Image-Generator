@@ -180,7 +180,7 @@ def create_enhanced_fallback_description(text: str) -> str:
     
     return description
 
-def generate_image(prompt: str, width: int = 512, height: int = 512) -> Image.Image:
+def generate_image(prompt: str, width: int = 960, height: int = 540) -> Image.Image:
     """Generate image using Flux model"""
     try:
         output = replicate_client.run(
