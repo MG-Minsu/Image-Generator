@@ -125,11 +125,58 @@ with st.sidebar:
     st.header("Configuration")
     
     st.subheader("Image Settings")
-    col1, col2 = st.columns(2)
-    with col1:
-        width = st.selectbox("Width", [512, 768, 1024], index=0)
-    with col2:
-        height = st.selectbox("Height", [512, 768, 1024], index=0)
+    
+    # Aspect ratio selection (user must choose)
+    aspect_ratio = st.selectbox(
+        "Select Aspect Ratio *",
+        ["16:9 (Widescreen)", "1:1 (Square)", "4:3 (Classic)", "3:4 (Portrait)", "9:16 (Vertical)"],
+        help="Choose the aspect ratio for generated images"
+    )
+    
+    # Size selection
+    size_option = st.selectbox(
+        "Image Size",
+        ["Small (512px)", "Medium (768px)", "Large (1024px)"],
+        index=1,
+        help="Choose the base size for images"
+    )
+    
+    # Calculate actual dimensions based on ratio and size
+    def get_dimensions(ratio_text, size_text):
+        # Extract base size
+        if "512" in size_text:
+            base_size = 512
+        elif "768" in size_text:
+            base_size = 768
+        else:  # 1024
+            base_size = 1024
+        
+        # Calculate width and height based on ratio
+        if "1:1" in ratio_text:
+            return base_size, base_size
+        elif "16:9" in ratio_text:
+            width = base_size
+            height = int(base_size * 9 / 16)
+            return width, height
+        elif "4:3" in ratio_text:
+            width = base_size
+            height = int(base_size * 3 / 4)
+            return width, height
+        elif "3:4" in ratio_text:
+            width = int(base_size * 3 / 4)
+            height = base_size
+            return width, height
+        elif "9:16" in ratio_text:
+            width = int(base_size * 9 / 16)
+            height = base_size
+            return width, height
+        else:
+            return base_size, base_size
+    
+    width, height = get_dimensions(aspect_ratio, size_option)
+    
+    # Display calculated dimensions
+    st.caption(f"Image dimensions: {width} × {height} pixels")
     
     enable_prompt_enhancement = st.checkbox(
         "Enhance prompts for better images",
@@ -137,14 +184,7 @@ with st.sidebar:
         help="Automatically improve subtitle text for image generation"
     )
     
-    # Option to limit number of sentences for processing
-    max_sentences = st.number_input(
-        "Max sentences to process (0 = all)",
-        min_value=0,
-        max_value=100,
-        value=10,
-        help="Limit processing to avoid long generation times"
-    )
+
 
 # File upload
 uploaded_file = st.file_uploader(
@@ -165,11 +205,6 @@ if uploaded_file is not None:
         
         # Split into sentences
         sentences = split_into_sentences(subtitles)
-        
-        # Apply sentence limit if specified
-        if max_sentences > 0:
-            sentences = sentences[:max_sentences]
-            st.info(f"Processing first {len(sentences)} sentences (limited by max setting)")
         
         st.success(f"Found {len(sentences)} sentences to process")
         
