@@ -168,7 +168,8 @@ def create_fallback_description(text: str, style_prompt: str = "") -> str:
     else:
         setting = "atmospheric setting"
     
-    description = f"{base} in {setting}, cinematic lighting, professional composition"
+    # Include the subtitle text in the description for context
+    description = f"{base} in {setting}, depicting: {text}, cinematic lighting, professional composition"
     
     if style_prompt:
         description += f", {style_prompt}"
@@ -350,7 +351,10 @@ if uploaded_file is not None:
             st.info("📝 Using basic scene descriptions...")
             scene_descriptions = []
             for timestamp, text in processed_entries:
-                description = create_fallback_description(text, style_prompt)
+                if style_prompt.strip():
+                    description = f"A cinematic scene depicting: {text}, {style_prompt.strip()}"
+                else:
+                    description = f"A cinematic scene depicting: {text}"
                 scene_descriptions.append((timestamp, text, description))
         
         # Preview scene descriptions
@@ -428,14 +432,14 @@ if uploaded_file is not None:
             st.session_state.image_data_for_download = image_data_for_download
             
             # Display results
-            if generated_images:
+            if st.session_state.generated_images:
                 st.subheader("🖼️ Generated Images")
                 
                 # Bulk download button
-                if len(image_data_for_download) > 1:
+                if len(st.session_state.image_data_for_download) > 1:
                     zip_buffer = BytesIO()
                     with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-                        for img_data, filename in image_data_for_download:
+                        for img_data, filename in st.session_state.image_data_for_download:
                             zip_file.writestr(filename, img_data)
                     
                     zip_buffer.seek(0)
@@ -444,12 +448,13 @@ if uploaded_file is not None:
                         data=zip_buffer.getvalue(),
                         file_name="srt_generated_images.zip",
                         mime="application/zip",
-                        use_container_width=True
+                        use_container_width=True,
+                        key="download_all_zip"
                     )
                     st.markdown("---")
                 
                 # Display images
-                for i, (image, description, original_text, timestamp) in enumerate(generated_images):
+                for i, (image, description, original_text, timestamp) in enumerate(st.session_state.generated_images):
                     with st.container():
                         st.markdown(f"### 🎬 Scene {i+1}: `{timestamp}`")
                         
@@ -474,7 +479,7 @@ if uploaded_file is not None:
                                 data=buf.getvalue(),
                                 file_name=f"scene_{i+1}_{timestamp}.png",
                                 mime="image/png",
-                                key=f"download_{i}",
+                                key=f"download_individual_{i}_{timestamp}",
                                 use_container_width=True
                             )
                         
@@ -482,6 +487,53 @@ if uploaded_file is not None:
     
     except Exception as e:
         st.error(f"❌ Error processing file: {str(e)}")
+
+# Display previously generated images if they exist in session state
+elif 'generated_images' in st.session_state and st.session_state.generated_images:
+    st.subheader("🖼️ Previously Generated Images")
+    
+    # Bulk download button for previous images
+    if len(st.session_state.image_data_for_download) > 1:
+        zip_buffer = BytesIO()
+        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+            for img_data, filename in st.session_state.image_data_for_download:
+                zip_file.writestr(filename, img_data)
+        
+        zip_buffer.seek(0)
+        st.download_button(
+            label="📦 Download All Previous Images (ZIP)",
+            data=zip_buffer.getvalue(),
+            file_name="srt_generated_images.zip",
+            mime="application/zip",
+            use_container_width=True,
+            key="download_previous_all_zip"
+        )
+        st.markdown("---")
+    
+    # Display previous images
+    for i, (image, description, original_text, timestamp) in enumerate(st.session_state.generated_images):
+        with st.expander(f"🎬 Scene {i+1}: {timestamp}"):
+            img_col, info_col = st.columns([2, 1])
+            with img_col:
+                st.image(image, use_container_width=True)
+            with info_col:
+                st.markdown("**📝 Original:**")
+                st.write(original_text)
+                st.markdown("**🎭 Description:**")
+                st.write(description)
+                
+                # Individual download for previous images
+                buf = BytesIO()
+                image.save(buf, format='PNG')
+                buf.seek(0)
+                st.download_button(
+                    label="💾 Download",
+                    data=buf.getvalue(),
+                    file_name=f"scene_{i+1}_{timestamp}.png",
+                    mime="image/png",
+                    key=f"download_previous_{i}_{timestamp}",
+                    use_container_width=True
+                )
 
 # Footer
 st.markdown("---")
