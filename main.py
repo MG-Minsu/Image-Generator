@@ -215,9 +215,20 @@ with st.sidebar:
     
     processing_mode = st.radio(
         "Subtitle Processing",
-        ["Individual subtitles", "Group by 2", "Group by 5"],
+        ["Individual subtitles", "Group subtitles"],
         help="Choose how to process subtitle entries"
     )
+    
+    if processing_mode == "Group subtitles":
+        group_size = st.number_input(
+            "Group Size",
+            min_value=2,
+            max_value=50,
+            value=2,
+            help="Number of subtitles to group together"
+        )
+    else:
+        group_size = 1
     
     description_mode = st.radio(
         "Scene Description",
@@ -292,10 +303,8 @@ if uploaded_file is not None:
         # Process subtitles based on mode
         if processing_mode == "Individual subtitles":
             processed_entries = process_individual_subtitles(subtitles)
-        elif processing_mode == "Group by 2":
-            processed_entries = group_subtitles(subtitles, 2)
-        else:  # Group by 5
-            processed_entries = group_subtitles(subtitles, 5)
+        else:  # Group subtitles
+            processed_entries = group_subtitles(subtitles, group_size)
         
         st.markdown(f"""
         <div class="success-box">
@@ -305,12 +314,17 @@ if uploaded_file is not None:
         
         # Preview processed entries
         with st.expander("👀 Preview Processed Entries"):
-            preview_count = st.slider("Entries to preview", 1, min(10, len(processed_entries)), 5)
+            show_all_entries = st.checkbox("Show all entries", key="show_all_processed")
             
-            for i, (timestamp, text) in enumerate(processed_entries[:preview_count]):
+            entries_to_show = processed_entries if show_all_entries else processed_entries[:5]
+            
+            for i, (timestamp, text) in enumerate(entries_to_show):
                 st.markdown(f"**{i+1}.** `{timestamp}`")
                 st.write(text)
                 st.markdown("---")
+            
+            if not show_all_entries and len(processed_entries) > 5:
+                st.info(f"Showing first 5 of {len(processed_entries)} entries. Check 'Show all entries' to see more.")
         
         # Generate scene descriptions
         st.subheader("🎭 Scene Descriptions")
@@ -341,13 +355,18 @@ if uploaded_file is not None:
         
         # Preview scene descriptions
         with st.expander("🎬 Preview Scene Descriptions"):
-            preview_desc = st.slider("Descriptions to preview", 1, min(5, len(scene_descriptions)), 3)
+            show_all_descriptions = st.checkbox("Show all descriptions", key="show_all_descriptions")
             
-            for i, (timestamp, original, description) in enumerate(scene_descriptions[:preview_desc]):
+            descriptions_to_show = scene_descriptions if show_all_descriptions else scene_descriptions[:3]
+            
+            for i, (timestamp, original, description) in enumerate(descriptions_to_show):
                 st.markdown(f"**{i+1}.** `{timestamp}`")
                 st.markdown(f"*Original:* {original}")
                 st.markdown(f"*Description:* {description}")
                 st.markdown("---")
+            
+            if not show_all_descriptions and len(scene_descriptions) > 3:
+                st.info(f"Showing first 3 of {len(scene_descriptions)} descriptions. Check 'Show all descriptions' to see more.")
         
         # Cost estimate
         estimated_cost = len(scene_descriptions) * 0.003
@@ -374,6 +393,12 @@ if uploaded_file is not None:
         if generate_all or generate_sample:
             descriptions_to_use = scene_descriptions[:5] if generate_sample else scene_descriptions
             
+            # Initialize session state for storing images if not exists
+            if 'generated_images' not in st.session_state:
+                st.session_state.generated_images = []
+            if 'image_data_for_download' not in st.session_state:
+                st.session_state.image_data_for_download = []
+            
             progress_bar = st.progress(0)
             status_text = st.empty()
             
@@ -397,6 +422,10 @@ if uploaded_file is not None:
             
             progress_bar.progress(1.0)
             status_text.success(f"🎉 Generated {len(generated_images)} images!")
+            
+            # Store in session state to prevent disappearing on download
+            st.session_state.generated_images = generated_images
+            st.session_state.image_data_for_download = image_data_for_download
             
             # Display results
             if generated_images:
