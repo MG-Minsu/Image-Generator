@@ -8,35 +8,69 @@ from typing import List, Tuple
 import zipfile
 import google.generativeai as genai
 
-
 # Set page config
 st.set_page_config(
     page_title="SRT Image Generator",
     page_icon="🎬",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
-# Get API keys from secrets
-try:
-    api_key = st.secrets["REPLICATE_API_TOKEN"]
-    replicate_client = replicate.Client(api_token=api_key)
-except:
-    st.error("Please add REPLICATE_API_TOKEN to your Streamlit secrets")
-    st.stop()
+# Custom CSS for better UI
+st.markdown("""
+<style>
+    .main-header {
+        text-align: center;
+        padding: 2rem 0;
+        background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        border-radius: 10px;
+        margin-bottom: 2rem;
+    }
+    
+    .config-section {
+        background: #f8f9fa;
+        padding: 1.5rem;
+        border-radius: 10px;
+        border-left: 4px solid #667eea;
+        margin: 1rem 0;
+    }
+    
+    .success-box {
+        background: #d4edda;
+        border: 1px solid #c3e6cb;
+        padding: 1rem;
+        border-radius: 5px;
+        color: #155724;
+    }
+    
+    .info-box {
+        background: #e3f2fd;
+        border: 1px solid #bbdefb;
+        padding: 1rem;
+        border-radius: 5px;
+        color: #0d47a1;
+    }
+</style>
+""", unsafe_allow_html=True)
 
-try:
-    gemini_api_key = st.secrets["GEMINI_API_KEY"]
-    genai.configure(api_key=gemini_api_key)
-    gemini_model = genai.GenerativeModel('gemini-2.5-flash')
-except:
-    st.error("Please add GEMINI_API_KEY to your Streamlit secrets")
-    st.stop()
+# Initialize API clients
+@st.cache_resource
+def init_apis():
+    try:
+        replicate_client = replicate.Client(api_token=st.secrets["REPLICATE_API_TOKEN"])
+        genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+        gemini_model = genai.GenerativeModel('gemini-2.5-flash')
+        return replicate_client, gemini_model
+    except Exception as e:
+        st.error("❌ Please configure your API keys in Streamlit secrets")
+        st.stop()
 
 def parse_srt(srt_content: str) -> List[Tuple[str, str, str, str]]:
     """Parse SRT content and return list of (timestamp, start_time, end_time, text) tuples"""
     blocks = re.split(r'\n\s*\n', srt_content.strip())
-    
     subtitles = []
+    
     for block in blocks:
         if not block.strip():
             continue
@@ -49,38 +83,22 @@ def parse_srt(srt_content: str) -> List[Tuple[str, str, str, str]]:
             
             if ' --> ' in timestamp:
                 start_time, end_time = timestamp.split(' --> ')
-                start_time = start_time.strip()
-                end_time = end_time.strip()
-            else:
-                start_time = timestamp
-                end_time = timestamp
-            
-            subtitles.append((timestamp, start_time, end_time, text))
+                subtitles.append((timestamp.strip(), start_time.strip(), end_time.strip(), text))
     
     return subtitles
 
-def group_subtitles_by_two(subtitles: List[Tuple[str, str, str, str]]) -> List[Tuple[str, str]]:
-    """Group subtitles in sets of 30 entries"""
+def group_subtitles(subtitles: List[Tuple[str, str, str, str]], group_size: int = 2) -> List[Tuple[str, str]]:
+    """Group subtitles by specified size"""
     grouped_entries = []
     
-    for i in range(0, len(subtitles), 30):
-        # Get up to 30 subtitles starting from index i
-        group = subtitles[i:i+30]
-        
-        # Use the first subtitle's timestamp for the group
+    for i in range(0, len(subtitles), group_size):
+        group = subtitles[i:i+group_size]
         timestamp = group[0][1]
         clean_timestamp = re.sub(r'[^\w:,\-_]', '_', timestamp)
         
-        # Combine text from all subtitles in the group
-        combined_text_parts = []
-        for subtitle in group:
-            text = subtitle[3].strip()
-            if text:  # Only add non-empty text
-                combined_text_parts.append(text)
+        combined_text = " ".join([subtitle[3].strip() for subtitle in group if subtitle[3].strip()])
         
-        combined_text = " ".join(combined_text_parts)
-        
-        if combined_text:  # Only add if there's actual content
+        if combined_text:
             grouped_entries.append((clean_timestamp, combined_text))
     
     return grouped_entries
@@ -88,130 +106,85 @@ def group_subtitles_by_two(subtitles: List[Tuple[str, str, str, str]]) -> List[T
 def process_individual_subtitles(subtitles: List[Tuple[str, str, str, str]]) -> List[Tuple[str, str]]:
     """Process each subtitle individually"""
     entries = []
-    
     for timestamp, start_time, end_time, text in subtitles:
         text = text.strip()
         if text:
             clean_timestamp = re.sub(r'[^\w:,\-_]', '_', start_time)
             entries.append((clean_timestamp, text))
-    
     return entries
 
-def describe_scene_with_gemini(text: str, additional_prompt: str = "") -> str:
-    """Use Gemini to describe what's happening in the sentence for visual representation"""
-    base_prompt = f"""Analyze this subtitle text and create a visual scene description optimized for AI image generation.
+def describe_scene_with_gemini(text: str, style_prompt: str, model) -> str:
+    """Use Gemini to describe scenes for image generation"""
+    prompt = f"""Create a visual scene description optimized for AI image generation from this subtitle:
 
-SUBTITLE TEXT: "{text}"
+SUBTITLE: "{text}"
 
-TASK: Describe the visual scene in a way that will work perfectly with AI image generation models like Flux. Focus on:
-- What actions are taking place
-- Setting/environment details
-- Characters and their positioning
-- Visual elements, objects, colors
-- Mood, lighting, atmosphere
-- Camera perspective
+Create a 25-40 word description focusing on:
+- Visual actions and settings
+- Character positioning and expressions  
+- Lighting and atmosphere
+- Cinematic composition
 
-RULES:
-- Write 25-40 words that work well for AI image generation
-- Use specific, visual keywords
-- Include cinematic/photographic terms when appropriate
-- Be concrete about visual elements
-- Focus on what would make a compelling image
-- Don't just repeat dialogue - interpret the visual scene
+Style requirements: {style_prompt if style_prompt else 'cinematic realism'}
 
-EXAMPLE:
-Input: "Hello, how are you today?"
-Output: Two people facing each other in friendly greeting gesture, warm indoor lighting, modern casual setting, medium shot composition, natural expressions, contemporary clothing"""
-
-    if additional_prompt.strip():
-        base_prompt += f"""
-
-ADDITIONAL STYLE/THEME REQUIREMENTS: "{additional_prompt.strip()}"
-Please incorporate these additional requirements into the scene description."""
-
-    base_prompt += "\n\nOUTPUT: Return only the optimized scene description for image generation."
+Return only the optimized scene description."""
 
     try:
-        response = gemini_model.generate_content(base_prompt)
-        description = response.text.strip()
-        description = description.strip('"\'')
+        response = model.generate_content(prompt)
+        description = response.text.strip().strip('"\'')
         
-        # If additional prompt exists, ensure it's incorporated
-        if additional_prompt.strip() and additional_prompt.strip().lower() not in description.lower():
-            description = f"{description}, {additional_prompt.strip()}"
+        if style_prompt and style_prompt.lower() not in description.lower():
+            description = f"{description}, {style_prompt}"
         
         return description
     except Exception as e:
-        error_msg = str(e)
-        if "429" in error_msg or "quota" in error_msg.lower():
-            st.warning("⚠️ Gemini API quota exceeded. Using enhanced fallback descriptions.")
-            return create_enhanced_fallback_description(text, additional_prompt)
+        if "429" in str(e) or "quota" in str(e).lower():
+            return create_fallback_description(text, style_prompt)
         else:
-            st.warning(f"Gemini API error: {error_msg}. Using fallback description.")
-            return create_enhanced_fallback_description(text, additional_prompt)
+            st.warning(f"Gemini API error: {str(e)}. Using fallback.")
+            return create_fallback_description(text, style_prompt)
 
-def create_enhanced_fallback_description(text: str, additional_prompt: str = "") -> str:
-    """Create better fallback descriptions when Gemini API is unavailable"""
+def create_fallback_description(text: str, style_prompt: str = "") -> str:
+    """Create fallback descriptions when Gemini is unavailable"""
     text_lower = text.lower()
     
-    # Simple keyword-based scene enhancement
-    scene_elements = []
-    
-    # Detect dialogue vs action
-    if any(word in text_lower for word in ['said', 'says', 'asked', 'replied', 'whispered', 'shouted']):
-        scene_elements.append("people in conversation")
-    elif any(word in text_lower for word in ['running', 'walking', 'moving', 'going', 'coming']):
-        scene_elements.append("person in motion")
-    elif any(word in text_lower for word in ['looking', 'watching', 'seeing', 'staring']):
-        scene_elements.append("focused gaze and observation")
+    # Detect scene type
+    if any(word in text_lower for word in ['running', 'walking', 'moving']):
+        base = "Person in dynamic motion"
+    elif any(word in text_lower for word in ['talking', 'speaking', 'conversation']):
+        base = "Characters in conversation"
+    elif any(word in text_lower for word in ['looking', 'watching', 'staring']):
+        base = "Focused observation scene"
     else:
-        scene_elements.append("cinematic scene")
+        base = "Cinematic scene"
     
-    # Detect setting clues
-    if any(word in text_lower for word in ['house', 'home', 'room', 'kitchen', 'bedroom']):
-        scene_elements.append("indoor domestic setting")
-    elif any(word in text_lower for word in ['office', 'work', 'desk', 'meeting']):
-        scene_elements.append("professional office environment")
-    elif any(word in text_lower for word in ['outside', 'street', 'park', 'car', 'road']):
-        scene_elements.append("outdoor urban environment")
-    elif any(word in text_lower for word in ['forest', 'tree', 'nature', 'mountain']):
-        scene_elements.append("natural outdoor setting")
+    # Detect setting
+    if any(word in text_lower for word in ['house', 'home', 'room']):
+        setting = "indoor domestic environment"
+    elif any(word in text_lower for word in ['office', 'work']):
+        setting = "professional office setting"
+    elif any(word in text_lower for word in ['outside', 'street', 'car']):
+        setting = "urban outdoor location"
     else:
-        scene_elements.append("atmospheric lighting")
+        setting = "atmospheric setting"
     
-    # Detect emotional tone
-    if any(word in text_lower for word in ['happy', 'laugh', 'smile', 'joy']):
-        scene_elements.append("warm positive mood")
-    elif any(word in text_lower for word in ['sad', 'cry', 'tear', 'worried']):
-        scene_elements.append("somber emotional atmosphere")
-    elif any(word in text_lower for word in ['angry', 'mad', 'fight', 'argue']):
-        scene_elements.append("tense dramatic lighting")
-    else:
-        scene_elements.append("natural realistic lighting")
+    description = f"{base} in {setting}, cinematic lighting, professional composition"
     
-    # Add cinematic quality
-    scene_elements.append("cinematic composition")
-    scene_elements.append("professional photography")
-    
-    # Combine elements
-    description = f"A {', '.join(scene_elements[:4])}, depicting: {text}"
-    
-    # Add additional prompt if provided
-    if additional_prompt.strip():
-        description += f", {additional_prompt.strip()}"
+    if style_prompt:
+        description += f", {style_prompt}"
     
     return description
 
-def generate_image(prompt: str, width: int = 1024, height: int = 574) -> Image.Image:
+def generate_image(prompt: str, client) -> Image.Image:
     """Generate image using Flux model"""
     try:
-        output = replicate_client.run(
+        output = client.run(
             "black-forest-labs/flux-schnell",
             input={
                 "prompt": prompt,
                 "aspect_ratio": "16:9",
-                "width": width,
-                "height": height,
+                "width": 1024,
+                "height": 574,
                 "num_outputs": 1,
                 "num_inference_steps": 4
             }
@@ -219,176 +192,187 @@ def generate_image(prompt: str, width: int = 1024, height: int = 574) -> Image.I
         
         image_url = output[0] if isinstance(output, list) else output
         response = requests.get(image_url)
-        response.raise_for_status()  # Raise exception for bad status codes
-        image = Image.open(BytesIO(response.content))
-        
-        return image
+        response.raise_for_status()
+        return Image.open(BytesIO(response.content))
     except Exception as e:
         st.error(f"Error generating image: {str(e)}")
         return None
 
-# App title and description
-st.title("🎬 SRT Image Generator")
-st.write("Upload an SRT subtitle file and generate images with Gemini scene descriptions")
+# Initialize APIs
+replicate_client, gemini_model = init_apis()
 
-# Configuration
-st.subheader("⚙️ Configuration")
+# Header
+st.markdown("""
+<div class="main-header">
+    <h1>🎬 SRT Image Generator</h1>
+    <p>Transform subtitle files into stunning visual scenes</p>
+</div>
+""", unsafe_allow_html=True)
 
-col1, col2 = st.columns(2)
+# Sidebar Configuration
+with st.sidebar:
+    st.header("⚙️ Configuration")
+    
+    processing_mode = st.radio(
+        "Subtitle Processing",
+        ["Individual subtitles", "Group by 2", "Group by 5"],
+        help="Choose how to process subtitle entries"
+    )
+    
+    description_mode = st.radio(
+        "Scene Description",
+        ["Enhanced AI descriptions", "Basic descriptions"],
+        help="AI descriptions provide better visual prompts"
+    )
+    
+    st.markdown("---")
+    
+    style_prompt = st.text_area(
+        "🎨 Visual Style (Optional)",
+        placeholder="e.g., 'cyberpunk neon', 'watercolor painting', 'film noir'",
+        height=80,
+        help="Add consistent visual style to all images"
+    )
+    
+    st.markdown("---")
+    st.info("📐 Images: 1024×574px (16:9)")
+    
+    force_fallback = st.checkbox(
+        "Skip AI descriptions",
+        help="Use basic descriptions only"
+    )
+
+# Main Content
+col1, col2 = st.columns([2, 1])
+
 with col1:
-    grouping_mode = st.selectbox(
-        "Subtitle Grouping",
-        ["Group by 2 subtitles", "Individual subtitles"],
-        help="How to group your subtitle entries"
+    # File Upload
+    st.subheader("📁 Upload SRT File")
+    uploaded_file = st.file_uploader(
+        "Choose your subtitle file",
+        type=['srt'],
+        help="Upload a valid .srt subtitle file"
     )
 
 with col2:
-    use_gemini_description = st.selectbox(
-        "Scene Description",
-        ["Use Gemini to describe scenes", "Use original subtitle text"],
-        help="How to create image prompts"
-    )
+    if uploaded_file:
+        st.subheader("📊 Quick Stats")
+        # We'll populate this after parsing
 
-# Additional prompt text field
-st.subheader("🎨 Additional Prompt Settings")
-additional_prompt = st.text_area(
-    "Additional Prompt (Optional)",
-    placeholder="Add any additional style, setting, or visual elements you want in all images (e.g., 'cyberpunk style', 'medieval fantasy setting', 'black and white photography', etc.)",
-    help="This text will be added to the scene description for every image to customize the overall style or theme",
-    height=100
-)
-
-# Sidebar for image settings
-with st.sidebar:
-    st.header("🖼️ Image Settings")
-    
-    # Fixed dimensions - closest to qHD but divisible by 16
-    width, height = 1024, 574  # 960÷16=60, 544÷16=34
-    st.info(f"📐 Image dimensions: {width} × {height} pixels (16:9 ratio)")
-    
-    st.markdown("---")
-    # Option to disable Gemini if quota exceeded
-    force_fallback = st.checkbox(
-        "🔧 Use Enhanced Fallback Descriptions Only",
-        help="Skip Gemini API calls and use smart keyword-based descriptions instead"
-    )
-
-st.divider()
-
-# File upload
-st.subheader("📁 Upload SRT File")
-uploaded_file = st.file_uploader(
-    "Choose your SRT file",
-    type=['srt'],
-    help="Upload a subtitle file (.srt format)"
-)
-
+# Process uploaded file
 if uploaded_file is not None:
-    # Parse SRT file
+    # Parse SRT
     try:
-        srt_content = uploaded_file.read().decode('utf-8')
-    except UnicodeDecodeError:
         try:
-            # Try different encoding if UTF-8 fails
+            srt_content = uploaded_file.read().decode('utf-8')
+        except UnicodeDecodeError:
             uploaded_file.seek(0)
             srt_content = uploaded_file.read().decode('latin-1')
-        except Exception as e:
-            st.error(f"Could not decode file. Please ensure it's a valid SRT file. Error: {str(e)}")
+        
+        subtitles = parse_srt(srt_content)
+        
+        if not subtitles:
+            st.error("❌ No subtitles found. Please check your SRT file format.")
             st.stop()
-    
-    subtitles = parse_srt(srt_content)
-    
-    if not subtitles:
-        st.error("❌ Could not parse any subtitles from the uploaded file. Please check the SRT format.")
-    else:
-        st.success(f"✅ Successfully parsed {len(subtitles)} subtitle entries")
         
-        # Process subtitles based on grouping mode
-        st.subheader("📝 Processing Subtitles")
+        # Update stats
+        with col2:
+            st.metric("Total Subtitles", len(subtitles))
+            
+            # Estimate duration
+            if len(subtitles) > 0:
+                try:
+                    last_time = subtitles[-1][2]  # end_time of last subtitle
+                    time_parts = last_time.split(':')
+                    total_minutes = int(time_parts[0]) * 60 + int(time_parts[1])
+                    st.metric("Duration", f"~{total_minutes} min")
+                except:
+                    st.metric("Duration", "Unknown")
         
-        if grouping_mode.startswith("Group by 2"):
-            st.info("👥 Grouping subtitles by pairs of 2...")
-            processed_entries = group_subtitles_by_two(subtitles)
-        else:
-            st.info("📄 Processing each subtitle individually...")
+        # Process subtitles based on mode
+        if processing_mode == "Individual subtitles":
             processed_entries = process_individual_subtitles(subtitles)
+        elif processing_mode == "Group by 2":
+            processed_entries = group_subtitles(subtitles, 2)
+        else:  # Group by 5
+            processed_entries = group_subtitles(subtitles, 5)
         
-        st.write(f"**Processed entries:** {len(processed_entries)}")
+        st.markdown(f"""
+        <div class="success-box">
+            ✅ Successfully processed <strong>{len(processed_entries)}</strong> entries from <strong>{len(subtitles)}</strong> subtitles
+        </div>
+        """, unsafe_allow_html=True)
         
-        # Show preview of processed entries
+        # Preview processed entries
         with st.expander("👀 Preview Processed Entries"):
-            show_all_entries = st.checkbox("Show all entries", key="show_all_processed")
-            entries_to_show = processed_entries if show_all_entries else processed_entries[:10]
+            preview_count = st.slider("Entries to preview", 1, min(10, len(processed_entries)), 5)
             
-            for i, (timestamp, text) in enumerate(entries_to_show):
-                st.text(f"{i+1}. [{timestamp}] {text}")
-            
-            if not show_all_entries and len(processed_entries) > 10:
-                st.text(f"... and {len(processed_entries) - 10} more entries")
+            for i, (timestamp, text) in enumerate(processed_entries[:preview_count]):
+                st.markdown(f"**{i+1}.** `{timestamp}`")
+                st.write(text)
+                st.markdown("---")
         
-        # Create scene descriptions
+        # Generate scene descriptions
         st.subheader("🎭 Scene Descriptions")
         
-        if use_gemini_description.startswith("Use Gemini") and not force_fallback:
-            st.info("🤖 Using Gemini to create optimized scene descriptions for image generation...")
+        if description_mode == "Enhanced AI descriptions" and not force_fallback:
+            st.info("🤖 Creating AI-optimized scene descriptions...")
             
-            # Create descriptions with progress tracking
             scene_descriptions = []
-            progress_container = st.container()
+            progress_bar = st.progress(0)
+            status_text = st.empty()
             
-            with progress_container:
-                progress_bar = st.progress(0)
-                status_text = st.empty()
+            for i, (timestamp, text) in enumerate(processed_entries):
+                status_text.text(f"Processing {i+1}/{len(processed_entries)}: {text[:50]}...")
+                progress_bar.progress(i / len(processed_entries))
                 
-                for i, (timestamp, text) in enumerate(processed_entries):
-                    status_text.text(f"Creating optimized scene description {i+1} of {len(processed_entries)}...")
-                    progress_bar.progress(i / len(processed_entries))
-                    
-                    description = describe_scene_with_gemini(text, additional_prompt)
-                    scene_descriptions.append((timestamp, text, description))
-                
-                progress_bar.progress(1.0)
-                status_text.text("✅ All optimized scene descriptions created!")
-        
-        elif force_fallback:
-            st.info("🔧 Using enhanced fallback descriptions (Gemini API disabled)...")
-            scene_descriptions = []
-            for timestamp, text in processed_entries:
-                description = create_enhanced_fallback_description(text, additional_prompt)
+                description = describe_scene_with_gemini(text, style_prompt, gemini_model)
                 scene_descriptions.append((timestamp, text, description))
             
-        else:
-            st.info("📝 Using original subtitle text...")
-            if additional_prompt.strip():
-                scene_descriptions = [(timestamp, text, f"A cinematic scene: {text}, {additional_prompt.strip()}") for timestamp, text in processed_entries]
-            else:
-                scene_descriptions = [(timestamp, text, f"A cinematic scene: {text}") for timestamp, text in processed_entries]
+            progress_bar.progress(1.0)
+            status_text.success("✅ All descriptions created!")
         
-        # Show preview of scene descriptions
+        else:
+            st.info("📝 Using basic scene descriptions...")
+            scene_descriptions = []
+            for timestamp, text in processed_entries:
+                description = create_fallback_description(text, style_prompt)
+                scene_descriptions.append((timestamp, text, description))
+        
+        # Preview scene descriptions
         with st.expander("🎬 Preview Scene Descriptions"):
-            show_all_descriptions = st.checkbox("Show all descriptions", key="show_all_descriptions")
-            descriptions_to_show = scene_descriptions if show_all_descriptions else scene_descriptions[:5]
+            preview_desc = st.slider("Descriptions to preview", 1, min(5, len(scene_descriptions)), 3)
             
-            for i, (timestamp, original, description) in enumerate(descriptions_to_show):
-                st.write(f"**{i+1}. [{timestamp}]**")
-                st.write(f"*Original:* {original}")
-                st.write(f"*Scene Description:* {description}")
-                st.write("---")
-            
-            if not show_all_descriptions and len(scene_descriptions) > 5:
-                st.text(f"... and {len(scene_descriptions) - 5} more descriptions")
+            for i, (timestamp, original, description) in enumerate(scene_descriptions[:preview_desc]):
+                st.markdown(f"**{i+1}.** `{timestamp}`")
+                st.markdown(f"*Original:* {original}")
+                st.markdown(f"*Description:* {description}")
+                st.markdown("---")
+        
+        # Cost estimate
+        estimated_cost = len(scene_descriptions) * 0.003
+        st.markdown(f"""
+        <div class="info-box">
+            💰 <strong>Estimated cost:</strong> ~${estimated_cost:.3f} USD for {len(scene_descriptions)} images
+        </div>
+        """, unsafe_allow_html=True)
         
         # Generate images
         st.subheader("🎨 Generate Images")
         
-        # Show cost estimate
-        estimated_cost = len(scene_descriptions) * 0.003  # Rough estimate for Flux Schnell
-        st.info(f"💰 Estimated cost: ~${estimated_cost:.3f} USD for {len(scene_descriptions)} images")
+        col_gen1, col_gen2 = st.columns(2)
         
-        if st.button("🚀 Generate All Images", type="primary", use_container_width=True):
-            # Initialize session state for storing images
-            if 'generated_images' not in st.session_state:
-                st.session_state.generated_images = []
+        with col_gen1:
+            generate_all = st.button("🚀 Generate All Images", type="primary", use_container_width=True)
+        
+        with col_gen2:
+            if len(scene_descriptions) > 5:
+                generate_sample = st.button("🎯 Generate 5 Sample Images", use_container_width=True)
+            else:
+                generate_sample = False
+        
+        if generate_all or generate_sample:
+            descriptions_to_use = scene_descriptions[:5] if generate_sample else scene_descriptions
             
             progress_bar = st.progress(0)
             status_text = st.empty()
@@ -396,68 +380,30 @@ if uploaded_file is not None:
             generated_images = []
             image_data_for_download = []
             
-            for i, (timestamp, original_text, description) in enumerate(scene_descriptions):
-                status_text.text(f"Generating image {i+1} of {len(scene_descriptions)}...")
-                progress_bar.progress(i / len(scene_descriptions))
+            for i, (timestamp, original_text, description) in enumerate(descriptions_to_use):
+                status_text.text(f"Generating image {i+1}/{len(descriptions_to_use)}...")
+                progress_bar.progress(i / len(descriptions_to_use))
                 
-                # Use the scene description as the prompt for Flux AI
-                image = generate_image(description, width, height)
+                image = generate_image(description, replicate_client)
                 
                 if image:
                     generated_images.append((image, description, original_text, timestamp))
                     
-                    # Convert image to bytes for download
+                    # Prepare for download
                     buf = BytesIO()
                     image.save(buf, format='PNG')
                     buf.seek(0)
-                    filename = f"{i+1}.png"
-                    image_data_for_download.append((buf.getvalue(), filename))
-                else:
-                    st.error(f"Failed to generate image for timestamp: {timestamp}")
+                    image_data_for_download.append((buf.getvalue(), f"{timestamp}.png"))
             
             progress_bar.progress(1.0)
-            status_text.text(f"🎉 Generated {len(generated_images)} out of {len(scene_descriptions)} images!")
+            status_text.success(f"🎉 Generated {len(generated_images)} images!")
             
-            # Store in session state
-            st.session_state.generated_images = generated_images
-            st.session_state.image_data_for_download = image_data_for_download
-            
-            # Display generated images
+            # Display results
             if generated_images:
                 st.subheader("🖼️ Generated Images")
                 
-                for i, (image, description, original_text, timestamp) in enumerate(generated_images):
-                    st.markdown(f"### 🎬 Image {i+1}: `{timestamp}`")
-                    
-                    col1, col2 = st.columns([3, 2])
-                    
-                    with col1:
-                        st.image(image, use_container_width=True)
-                    
-                    with col2:
-                        st.write("**📝 Original Subtitle:**")
-                        st.write(original_text)
-                        st.write("**🎭 Scene Description (Used for Image):**")
-                        st.write(description)
-                        
-                        # Download button for individual image
-                        buf = BytesIO()
-                        image.save(buf, format='PNG')
-                        buf.seek(0)
-                        st.download_button(
-                            label="💾 Download Image",
-                            data=buf.getvalue(),
-                            file_name=f"{i+1}.png",
-                            mime="image/png",
-                            key=f"download_{i}_{timestamp}",
-                            use_container_width=True
-                        )
-                    
-                    st.divider()
-                
-                # Bulk download
+                # Bulk download button
                 if len(image_data_for_download) > 1:
-                    st.subheader("📦 Bulk Download")
                     zip_buffer = BytesIO()
                     with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
                         for img_data, filename in image_data_for_download:
@@ -471,18 +417,46 @@ if uploaded_file is not None:
                         mime="application/zip",
                         use_container_width=True
                     )
+                    st.markdown("---")
+                
+                # Display images
+                for i, (image, description, original_text, timestamp) in enumerate(generated_images):
+                    with st.container():
+                        st.markdown(f"### 🎬 Scene {i+1}: `{timestamp}`")
+                        
+                        img_col, info_col = st.columns([3, 2])
+                        
+                        with img_col:
+                            st.image(image, use_container_width=True)
+                        
+                        with info_col:
+                            st.markdown("**📝 Original Subtitle:**")
+                            st.write(original_text)
+                            
+                            st.markdown("**🎭 Scene Description:**")
+                            st.write(description)
+                            
+                            # Individual download
+                            buf = BytesIO()
+                            image.save(buf, format='PNG')
+                            buf.seek(0)
+                            st.download_button(
+                                label="💾 Download",
+                                data=buf.getvalue(),
+                                file_name=f"scene_{i+1}_{timestamp}.png",
+                                mime="image/png",
+                                key=f"download_{i}",
+                                use_container_width=True
+                            )
+                        
+                        st.markdown("---")
+    
+    except Exception as e:
+        st.error(f"❌ Error processing file: {str(e)}")
 
-# Display previously generated images if they exist in session state
-elif 'generated_images' in st.session_state and st.session_state.generated_images:
-    st.subheader("🖼️ Previously Generated Images")
-    for i, (image, description, original_text, timestamp) in enumerate(st.session_state.generated_images):
-        with st.expander(f"Image {i+1}: {timestamp}"):
-            col1, col2 = st.columns([2, 1])
-            with col1:
-                st.image(image, use_container_width=True)
-            with col2:
-                st.write("**Original:**", original_text)
-                st.write("**Description:**", description)
-
+# Footer
 st.markdown("---")
-st.markdown("🚀 **Built with Streamlit** | 🤖 **Powered by Flux AI & Gemini**")
+st.markdown(
+    "<div style='text-align: center; color: #666;'>🚀 Built with Streamlit | 🤖 Powered by Flux AI & Gemini</div>", 
+    unsafe_allow_html=True
+)
