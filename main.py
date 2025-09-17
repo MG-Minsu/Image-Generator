@@ -10,7 +10,7 @@ import google.generativeai as genai
 
 # Set page config
 st.set_page_config(
-    page_title="SRT Image Generator",
+    page_title="SRT Media Generator",
     page_icon="🎬",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -50,6 +50,14 @@ st.markdown("""
         padding: 1rem;
         border-radius: 5px;
         color: #0d47a1;
+    }
+    
+    .video-box {
+        background: #fff3cd;
+        border: 1px solid #ffeaa7;
+        padding: 1rem;
+        border-radius: 5px;
+        color: #856404;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -199,345 +207,557 @@ def generate_image(prompt: str, client) -> Image.Image:
         st.error(f"Error generating image: {str(e)}")
         return None
 
+def generate_video(audio_file, images_zip, prompt: str, max_attempts: int, client):
+    """Generate video using FFmpeg model"""
+    try:
+        output = client.run(
+            "fofr/smart-ffmpeg",
+            input={
+                "files": [audio_file, images_zip],
+                "prompt": prompt,
+                "max_attempts": max_attempts
+            }
+        )
+        
+        return output
+    except Exception as e:
+        st.error(f"Error generating video: {str(e)}")
+        return None
+
 # Initialize APIs
 replicate_client, gemini_model = init_apis()
 
 # Header
 st.markdown("""
 <div class="main-header">
-    <h1>🎬 SRT Image Generator</h1>
-    <p>Transform subtitle files into stunning visual scenes</p>
+    <h1>🎬 SRT Media Generator</h1>
+    <p>Transform subtitle files into stunning visuals and videos</p>
 </div>
 """, unsafe_allow_html=True)
 
-# Sidebar Configuration
-with st.sidebar:
-    st.header("⚙️ Configuration")
-    
-    processing_mode = st.radio(
-        "Subtitle Processing",
-        ["Individual subtitles", "Group subtitles"],
-        help="Choose how to process subtitle entries"
-    )
-    
-    if processing_mode == "Group subtitles":
-        group_size = st.number_input(
-            "Group Size",
-            min_value=2,
-            max_value=50,
-            value=2,
-            help="Number of subtitles to group together"
+# Tab Navigation
+tab1, tab2 = st.tabs(["🖼️ Image Generation", "🎥 Video Creation"])
+
+# ===== IMAGE GENERATION TAB =====
+with tab1:
+    # Sidebar Configuration for Image Generation
+    with st.sidebar:
+        st.header("⚙️ Image Configuration")
+        
+        processing_mode = st.radio(
+            "Subtitle Processing",
+            ["Individual subtitles", "Group subtitles"],
+            help="Choose how to process subtitle entries"
         )
-    else:
-        group_size = 1
-    
-    description_mode = st.radio(
-        "Scene Description",
-        ["Enhanced AI descriptions", "Basic descriptions"],
-        help="AI descriptions provide better visual prompts"
-    )
-    
-    st.markdown("---")
-    
-    style_prompt = st.text_area(
-        "🎨 Visual Style (Optional)",
-        placeholder="e.g., 'cyberpunk neon', 'watercolor painting', 'film noir'",
-        height=80,
-        help="Add consistent visual style to all images"
-    )
-    
-    st.markdown("---")
-    st.info("📐 Images: 1024×574px (16:9)")
-    
-    force_fallback = st.checkbox(
-        "Skip AI descriptions",
-        help="Use basic descriptions only"
-    )
-
-# Main Content
-col1, col2 = st.columns([2, 1])
-
-with col1:
-    # File Upload
-    st.subheader("📁 Upload SRT File")
-    uploaded_file = st.file_uploader(
-        "Choose your subtitle file",
-        type=['srt'],
-        help="Upload a valid .srt subtitle file"
-    )
-
-with col2:
-    if uploaded_file:
-        st.subheader("📊 Quick Stats")
-        # We'll populate this after parsing
-
-# Process uploaded file
-if uploaded_file is not None:
-    # Parse SRT
-    try:
-        try:
-            srt_content = uploaded_file.read().decode('utf-8')
-        except UnicodeDecodeError:
-            uploaded_file.seek(0)
-            srt_content = uploaded_file.read().decode('latin-1')
         
-        subtitles = parse_srt(srt_content)
-        
-        if not subtitles:
-            st.error("❌ No subtitles found. Please check your SRT file format.")
-            st.stop()
-        
-        # Update stats
-        with col2:
-            st.metric("Total Subtitles", len(subtitles))
-            
-            # Estimate duration
-            if len(subtitles) > 0:
-                try:
-                    last_time = subtitles[-1][2]  # end_time of last subtitle
-                    time_parts = last_time.split(':')
-                    total_minutes = int(time_parts[0]) * 60 + int(time_parts[1])
-                    st.metric("Duration", f"~{total_minutes} min")
-                except:
-                    st.metric("Duration", "Unknown")
-        
-        # Process subtitles based on mode
-        if processing_mode == "Individual subtitles":
-            processed_entries = process_individual_subtitles(subtitles)
-        else:  # Group subtitles
-            processed_entries = group_subtitles(subtitles, group_size)
-        
-        st.markdown(f"""
-        <div class="success-box">
-            ✅ Successfully processed <strong>{len(processed_entries)}</strong> entries from <strong>{len(subtitles)}</strong> subtitles
-        </div>
-        """, unsafe_allow_html=True)
-        
-        # Preview processed entries
-        with st.expander("👀 Preview Processed Entries"):
-            show_all_entries = st.checkbox("Show all entries", key="show_all_processed")
-            
-            entries_to_show = processed_entries if show_all_entries else processed_entries[:5]
-            
-            for i, (timestamp, text) in enumerate(entries_to_show):
-                st.markdown(f"**{i+1}.** `{timestamp}`")
-                st.write(text)
-                st.markdown("---")
-            
-            if not show_all_entries and len(processed_entries) > 5:
-                st.info(f"Showing first 5 of {len(processed_entries)} entries. Check 'Show all entries' to see more.")
-        
-        # Generate scene descriptions
-        st.subheader("🎭 Scene Descriptions")
-        
-        if description_mode == "Enhanced AI descriptions" and not force_fallback:
-            st.info("🤖 Creating AI-optimized scene descriptions...")
-            
-            scene_descriptions = []
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            
-            for i, (timestamp, text) in enumerate(processed_entries):
-                status_text.text(f"Processing {i+1}/{len(processed_entries)}: {text[:50]}...")
-                progress_bar.progress(i / len(processed_entries))
-                
-                description = describe_scene_with_gemini(text, style_prompt, gemini_model)
-                scene_descriptions.append((timestamp, text, description))
-            
-            progress_bar.progress(1.0)
-            status_text.success("✅ All descriptions created!")
-        
+        if processing_mode == "Group subtitles":
+            group_size = st.number_input(
+                "Group Size",
+                min_value=2,
+                max_value=50,
+                value=2,
+                help="Number of subtitles to group together"
+            )
         else:
-            st.info("📝 Using basic scene descriptions...")
-            scene_descriptions = []
-            for timestamp, text in processed_entries:
-                if style_prompt.strip():
-                    description = f"A cinematic scene depicting: {text}, {style_prompt.strip()}"
-                else:
-                    description = f"A cinematic scene depicting: {text}"
-                scene_descriptions.append((timestamp, text, description))
+            group_size = 1
         
-        # Preview scene descriptions
-        with st.expander("🎬 Preview Scene Descriptions"):
-            show_all_descriptions = st.checkbox("Show all descriptions", key="show_all_descriptions")
-            
-            descriptions_to_show = scene_descriptions if show_all_descriptions else scene_descriptions[:3]
-            
-            for i, (timestamp, original, description) in enumerate(descriptions_to_show):
-                st.markdown(f"**{i+1}.** `{timestamp}`")
-                st.markdown(f"*Original:* {original}")
-                st.markdown(f"*Description:* {description}")
-                st.markdown("---")
-            
-            if not show_all_descriptions and len(scene_descriptions) > 3:
-                st.info(f"Showing first 3 of {len(scene_descriptions)} descriptions. Check 'Show all descriptions' to see more.")
+        description_mode = st.radio(
+            "Scene Description",
+            ["Enhanced AI descriptions", "Basic descriptions"],
+            help="AI descriptions provide better visual prompts"
+        )
         
-        # Cost estimate
-        estimated_cost = len(scene_descriptions) * 0.003
-        st.markdown(f"""
-        <div class="info-box">
-            💰 <strong>Estimated cost:</strong> ~${estimated_cost:.3f} USD for {len(scene_descriptions)} images
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown("---")
         
-        # Generate images
-        st.subheader("🎨 Generate Images")
+        style_prompt = st.text_area(
+            "🎨 Visual Style (Optional)",
+            placeholder="e.g., 'cyberpunk neon', 'watercolor painting', 'film noir'",
+            height=80,
+            help="Add consistent visual style to all images"
+        )
         
-        col_gen1, col_gen2 = st.columns(2)
+        st.markdown("---")
+        st.info("📐 Images: 1024×574px (16:9)")
         
-        with col_gen1:
-            generate_all = st.button("🚀 Generate All Images", type="primary", use_container_width=True)
-        
-        with col_gen2:
-            if len(scene_descriptions) > 5:
-                generate_sample = st.button("🎯 Generate 5 Sample Images", use_container_width=True)
-            else:
-                generate_sample = False
-        
-        if generate_all or generate_sample:
-            descriptions_to_use = scene_descriptions[:5] if generate_sample else scene_descriptions
+        force_fallback = st.checkbox(
+            "Skip AI descriptions",
+            help="Use basic descriptions only"
+        )
+
+    # Main Content for Image Generation
+    col1, col2 = st.columns([2, 1])
+
+    with col1:
+        # File Upload
+        st.subheader("📁 Upload SRT File")
+        uploaded_file = st.file_uploader(
+            "Choose your subtitle file",
+            type=['srt'],
+            help="Upload a valid .srt subtitle file",
+            key="img_srt_upload"
+        )
+
+    with col2:
+        if uploaded_file:
+            st.subheader("📊 Quick Stats")
+            # We'll populate this after parsing
+
+    # Process uploaded file
+    if uploaded_file is not None:
+        # Parse SRT
+        try:
+            try:
+                srt_content = uploaded_file.read().decode('utf-8')
+            except UnicodeDecodeError:
+                uploaded_file.seek(0)
+                srt_content = uploaded_file.read().decode('latin-1')
             
-            # Initialize session state for storing images if not exists
-            if 'generated_images' not in st.session_state:
-                st.session_state.generated_images = []
-            if 'image_data_for_download' not in st.session_state:
-                st.session_state.image_data_for_download = []
+            subtitles = parse_srt(srt_content)
             
-            progress_bar = st.progress(0)
-            status_text = st.empty()
+            if not subtitles:
+                st.error("❌ No subtitles found. Please check your SRT file format.")
+                st.stop()
             
-            generated_images = []
-            image_data_for_download = []
-            
-            for i, (timestamp, original_text, description) in enumerate(descriptions_to_use):
-                status_text.text(f"Generating image {i+1}/{len(descriptions_to_use)}...")
-                progress_bar.progress(i / len(descriptions_to_use))
+            # Update stats
+            with col2:
+                st.metric("Total Subtitles", len(subtitles))
                 
-                image = generate_image(description, replicate_client)
+                # Estimate duration
+                if len(subtitles) > 0:
+                    try:
+                        last_time = subtitles[-1][2]  # end_time of last subtitle
+                        time_parts = last_time.split(':')
+                        total_minutes = int(time_parts[0]) * 60 + int(time_parts[1])
+                        st.metric("Duration", f"~{total_minutes} min")
+                    except:
+                        st.metric("Duration", "Unknown")
+            
+            # Process subtitles based on mode
+            if processing_mode == "Individual subtitles":
+                processed_entries = process_individual_subtitles(subtitles)
+            else:  # Group subtitles
+                processed_entries = group_subtitles(subtitles, group_size)
+            
+            st.markdown(f"""
+            <div class="success-box">
+                ✅ Successfully processed <strong>{len(processed_entries)}</strong> entries from <strong>{len(subtitles)}</strong> subtitles
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Preview processed entries
+            with st.expander("👀 Preview Processed Entries"):
+                show_all_entries = st.checkbox("Show all entries", key="show_all_processed")
                 
-                if image:
-                    generated_images.append((image, description, original_text, timestamp))
+                entries_to_show = processed_entries if show_all_entries else processed_entries[:5]
+                
+                for i, (timestamp, text) in enumerate(entries_to_show):
+                    st.markdown(f"**{i+1}.** `{timestamp}`")
+                    st.write(text)
+                    st.markdown("---")
+                
+                if not show_all_entries and len(processed_entries) > 5:
+                    st.info(f"Showing first 5 of {len(processed_entries)} entries. Check 'Show all entries' to see more.")
+            
+            # Generate scene descriptions
+            st.subheader("🎭 Scene Descriptions")
+            
+            if description_mode == "Enhanced AI descriptions" and not force_fallback:
+                st.info("🤖 Creating AI-optimized scene descriptions...")
+                
+                scene_descriptions = []
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                
+                for i, (timestamp, text) in enumerate(processed_entries):
+                    status_text.text(f"Processing {i+1}/{len(processed_entries)}: {text[:50]}...")
+                    progress_bar.progress(i / len(processed_entries))
                     
-                    # Prepare for download
+                    description = describe_scene_with_gemini(text, style_prompt, gemini_model)
+                    scene_descriptions.append((timestamp, text, description))
+                
+                progress_bar.progress(1.0)
+                status_text.success("✅ All descriptions created!")
+            
+            else:
+                st.info("📝 Using basic scene descriptions...")
+                scene_descriptions = []
+                for timestamp, text in processed_entries:
+                    if style_prompt.strip():
+                        description = f"A cinematic scene depicting: {text}, {style_prompt.strip()}"
+                    else:
+                        description = f"A cinematic scene depicting: {text}"
+                    scene_descriptions.append((timestamp, text, description))
+            
+            # Preview scene descriptions
+            with st.expander("🎬 Preview Scene Descriptions"):
+                show_all_descriptions = st.checkbox("Show all descriptions", key="show_all_descriptions")
+                
+                descriptions_to_show = scene_descriptions if show_all_descriptions else scene_descriptions[:3]
+                
+                for i, (timestamp, original, description) in enumerate(descriptions_to_show):
+                    st.markdown(f"**{i+1}.** `{timestamp}`")
+                    st.markdown(f"*Original:* {original}")
+                    st.markdown(f"*Description:* {description}")
+                    st.markdown("---")
+                
+                if not show_all_descriptions and len(scene_descriptions) > 3:
+                    st.info(f"Showing first 3 of {len(scene_descriptions)} descriptions. Check 'Show all descriptions' to see more.")
+            
+            # Cost estimate
+            estimated_cost = len(scene_descriptions) * 0.003
+            st.markdown(f"""
+            <div class="info-box">
+                💰 <strong>Estimated cost:</strong> ~${estimated_cost:.3f} USD for {len(scene_descriptions)} images
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Generate images
+            st.subheader("🎨 Generate Images")
+            
+            col_gen1, col_gen2 = st.columns(2)
+            
+            with col_gen1:
+                generate_all = st.button("🚀 Generate All Images", type="primary", use_container_width=True, key="gen_all_img")
+            
+            with col_gen2:
+                if len(scene_descriptions) > 5:
+                    generate_sample = st.button("🎯 Generate 5 Sample Images", use_container_width=True, key="gen_sample_img")
+                else:
+                    generate_sample = False
+            
+            if generate_all or generate_sample:
+                descriptions_to_use = scene_descriptions[:5] if generate_sample else scene_descriptions
+                
+                # Initialize session state for storing images if not exists
+                if 'generated_images' not in st.session_state:
+                    st.session_state.generated_images = []
+                if 'image_data_for_download' not in st.session_state:
+                    st.session_state.image_data_for_download = []
+                
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                
+                generated_images = []
+                image_data_for_download = []
+                
+                for i, (timestamp, original_text, description) in enumerate(descriptions_to_use):
+                    status_text.text(f"Generating image {i+1}/{len(descriptions_to_use)}...")
+                    progress_bar.progress(i / len(descriptions_to_use))
+                    
+                    image = generate_image(description, replicate_client)
+                    
+                    if image:
+                        generated_images.append((image, description, original_text, timestamp))
+                        
+                        # Prepare for download
+                        buf = BytesIO()
+                        image.save(buf, format='PNG')
+                        buf.seek(0)
+                        image_data_for_download.append((buf.getvalue(), f"{timestamp}.png"))
+                
+                progress_bar.progress(1.0)
+                status_text.success(f"🎉 Generated {len(generated_images)} images!")
+                
+                # Store in session state to prevent disappearing on download
+                st.session_state.generated_images = generated_images
+                st.session_state.image_data_for_download = image_data_for_download
+                
+                # Display results
+                if st.session_state.generated_images:
+                    st.subheader("🖼️ Generated Images")
+                    
+                    # Bulk download button
+                    if len(st.session_state.image_data_for_download) > 1:
+                        zip_buffer = BytesIO()
+                        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+                            for img_data, filename in st.session_state.image_data_for_download:
+                                zip_file.writestr(filename, img_data)
+                        
+                        zip_buffer.seek(0)
+                        st.download_button(
+                            label="📦 Download All Images (ZIP)",
+                            data=zip_buffer.getvalue(),
+                            file_name="srt_generated_images.zip",
+                            mime="application/zip",
+                            use_container_width=True,
+                            key="download_all_zip"
+                        )
+                        st.markdown("---")
+                    
+                    # Display images
+                    for i, (image, description, original_text, timestamp) in enumerate(st.session_state.generated_images):
+                        with st.container():
+                            st.markdown(f"### 🎬 Scene {i+1}: `{timestamp}`")
+                            
+                            img_col, info_col = st.columns([3, 2])
+                            
+                            with img_col:
+                                st.image(image, use_container_width=True)
+                            
+                            with info_col:
+                                st.markdown("**📝 Original Subtitle:**")
+                                st.write(original_text)
+                                
+                                st.markdown("**🎭 Scene Description:**")
+                                st.write(description)
+                                
+                                # Individual download
+                                buf = BytesIO()
+                                image.save(buf, format='PNG')
+                                buf.seek(0)
+                                st.download_button(
+                                    label="💾 Download",
+                                    data=buf.getvalue(),
+                                    file_name=f"scene_{i+1}_{timestamp}.png",
+                                    mime="image/png",
+                                    key=f"download_individual_{i}_{timestamp}",
+                                    use_container_width=True
+                                )
+                            
+                            st.markdown("---")
+        
+        except Exception as e:
+            st.error(f"❌ Error processing file: {str(e)}")
+
+    # Display previously generated images if they exist in session state
+    elif 'generated_images' in st.session_state and st.session_state.generated_images:
+        st.subheader("🖼️ Previously Generated Images")
+        
+        # Bulk download button for previous images
+        if len(st.session_state.image_data_for_download) > 1:
+            zip_buffer = BytesIO()
+            with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+                for img_data, filename in st.session_state.image_data_for_download:
+                    zip_file.writestr(filename, img_data)
+            
+            zip_buffer.seek(0)
+            st.download_button(
+                label="📦 Download All Previous Images (ZIP)",
+                data=zip_buffer.getvalue(),
+                file_name="srt_generated_images.zip",
+                mime="application/zip",
+                use_container_width=True,
+                key="download_previous_all_zip"
+            )
+            st.markdown("---")
+        
+        # Display previous images
+        for i, (image, description, original_text, timestamp) in enumerate(st.session_state.generated_images):
+            with st.expander(f"🎬 Scene {i+1}: {timestamp}"):
+                img_col, info_col = st.columns([2, 1])
+                with img_col:
+                    st.image(image, use_container_width=True)
+                with info_col:
+                    st.markdown("**📝 Original:**")
+                    st.write(original_text)
+                    st.markdown("**🎭 Description:**")
+                    st.write(description)
+                    
+                    # Individual download for previous images
                     buf = BytesIO()
                     image.save(buf, format='PNG')
                     buf.seek(0)
-                    image_data_for_download.append((buf.getvalue(), f"{timestamp}.png"))
-            
-            progress_bar.progress(1.0)
-            status_text.success(f"🎉 Generated {len(generated_images)} images!")
-            
-            # Store in session state to prevent disappearing on download
-            st.session_state.generated_images = generated_images
-            st.session_state.image_data_for_download = image_data_for_download
-            
-            # Display results
-            if st.session_state.generated_images:
-                st.subheader("🖼️ Generated Images")
-                
-                # Bulk download button
-                if len(st.session_state.image_data_for_download) > 1:
-                    zip_buffer = BytesIO()
-                    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-                        for img_data, filename in st.session_state.image_data_for_download:
-                            zip_file.writestr(filename, img_data)
-                    
-                    zip_buffer.seek(0)
                     st.download_button(
-                        label="📦 Download All Images (ZIP)",
-                        data=zip_buffer.getvalue(),
-                        file_name="srt_generated_images.zip",
-                        mime="application/zip",
-                        use_container_width=True,
-                        key="download_all_zip"
+                        label="💾 Download",
+                        data=buf.getvalue(),
+                        file_name=f"scene_{i+1}_{timestamp}.png",
+                        mime="image/png",
+                        key=f"download_previous_{i}_{timestamp}",
+                        use_container_width=True
                     )
-                    st.markdown("---")
-                
-                # Display images
-                for i, (image, description, original_text, timestamp) in enumerate(st.session_state.generated_images):
-                    with st.container():
-                        st.markdown(f"### 🎬 Scene {i+1}: `{timestamp}`")
-                        
-                        img_col, info_col = st.columns([3, 2])
-                        
-                        with img_col:
-                            st.image(image, use_container_width=True)
-                        
-                        with info_col:
-                            st.markdown("**📝 Original Subtitle:**")
-                            st.write(original_text)
-                            
-                            st.markdown("**🎭 Scene Description:**")
-                            st.write(description)
-                            
-                            # Individual download
-                            buf = BytesIO()
-                            image.save(buf, format='PNG')
-                            buf.seek(0)
-                            st.download_button(
-                                label="💾 Download",
-                                data=buf.getvalue(),
-                                file_name=f"scene_{i+1}_{timestamp}.png",
-                                mime="image/png",
-                                key=f"download_individual_{i}_{timestamp}",
-                                use_container_width=True
-                            )
-                        
-                        st.markdown("---")
-    
-    except Exception as e:
-        st.error(f"❌ Error processing file: {str(e)}")
 
-# Display previously generated images if they exist in session state
-elif 'generated_images' in st.session_state and st.session_state.generated_images:
-    st.subheader("🖼️ Previously Generated Images")
+# ===== VIDEO CREATION TAB =====
+with tab2:
+    st.subheader("🎥 Video Creation with FFmpeg")
     
-    # Bulk download button for previous images
-    if len(st.session_state.image_data_for_download) > 1:
-        zip_buffer = BytesIO()
-        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-            for img_data, filename in st.session_state.image_data_for_download:
-                zip_file.writestr(filename, img_data)
+    # Sidebar for Video Configuration
+    with st.sidebar:
+        st.header("🎬 Video Configuration")
         
-        zip_buffer.seek(0)
-        st.download_button(
-            label="📦 Download All Previous Images (ZIP)",
-            data=zip_buffer.getvalue(),
-            file_name="srt_generated_images.zip",
-            mime="application/zip",
-            use_container_width=True,
-            key="download_previous_all_zip"
+        max_attempts = st.number_input(
+            "Max Attempts",
+            min_value=1,
+            max_value=10,
+            value=3,
+            help="Maximum attempts for video processing"
         )
+        
         st.markdown("---")
+        st.info("📋 Requirements:\n- Audio file\n- Images ZIP file\n- FFmpeg prompt")
+
+    # Video Creation Interface
+    st.markdown("""
+    <div class="video-box">
+        🎯 <strong>Video Creation Process:</strong><br>
+        1. Upload your audio file (MP3, WAV, etc.)<br>
+        2. Upload a ZIP file containing your images<br>
+        3. Provide FFmpeg instructions<br>
+        4. Generate your video!
+    </div>
+    """, unsafe_allow_html=True)
     
-    # Display previous images
-    for i, (image, description, original_text, timestamp) in enumerate(st.session_state.generated_images):
-        with st.expander(f"🎬 Scene {i+1}: {timestamp}"):
-            img_col, info_col = st.columns([2, 1])
-            with img_col:
-                st.image(image, use_container_width=True)
-            with info_col:
-                st.markdown("**📝 Original:**")
-                st.write(original_text)
-                st.markdown("**🎭 Description:**")
-                st.write(description)
-                
-                # Individual download for previous images
-                buf = BytesIO()
-                image.save(buf, format='PNG')
-                buf.seek(0)
-                st.download_button(
-                    label="💾 Download",
-                    data=buf.getvalue(),
-                    file_name=f"scene_{i+1}_{timestamp}.png",
-                    mime="image/png",
-                    key=f"download_previous_{i}_{timestamp}",
-                    use_container_width=True
-                )
+    # File uploads for video
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("🎵 Upload Audio File")
+        audio_file = st.file_uploader(
+            "Choose audio file",
+            type=['mp3', 'wav', 'aac', 'm4a', 'ogg'],
+            help="Upload the audio track for your video",
+            key="audio_upload"
+        )
+        
+        if audio_file:
+            st.success(f"✅ Audio uploaded: {audio_file.name}")
+            # Show audio player
+            st.audio(audio_file)
+    
+    with col2:
+        st.subheader("📦 Upload Images ZIP")
+        images_zip = st.file_uploader(
+            "Choose images ZIP file",
+            type=['zip'],
+            help="Upload a ZIP file containing all your images",
+            key="images_zip_upload"
+        )
+        
+        if images_zip:
+            st.success(f"✅ Images uploaded: {images_zip.name}")
+            st.info(f"File size: {len(images_zip.getvalue()) / 1024 / 1024:.2f} MB")
+    
+    # Quick option to use generated images
+    if 'image_data_for_download' in st.session_state and st.session_state.image_data_for_download:
+        st.markdown("---")
+        st.subheader("🖼️ Use Generated Images")
+        
+        if st.button("📦 Create ZIP from Generated Images", use_container_width=True, key="create_zip_from_generated"):
+            # Create ZIP from generated images
+            zip_buffer = BytesIO()
+            with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+                for i, (img_data, filename) in enumerate(st.session_state.image_data_for_download):
+                    # Rename files to be sequential for video
+                    new_filename = f"image_{i+1:03d}.png"
+                    zip_file.writestr(new_filename, img_data)
+            
+            zip_buffer.seek(0)
+            st.session_state.generated_images_zip = zip_buffer.getvalue()
+            st.success("✅ ZIP file created from generated images!")
+            
+            # Download option
+            st.download_button(
+                label="💾 Download Generated Images ZIP",
+                data=st.session_state.generated_images_zip,
+                file_name="generated_images_for_video.zip",
+                mime="application/zip",
+                key="download_generated_zip"
+            )
+    
+    # FFmpeg prompt
+    st.subheader("⚙️ FFmpeg Instructions")
+    ffmpeg_prompt = st.text_area(
+        "FFmpeg Prompt",
+        placeholder="Example: Create a video by combining the audio file with images, showing each image for 2 seconds, with smooth transitions between images. Add fade in/out effects and ensure audio and video are synchronized.",
+        height=120,
+        help="Provide detailed instructions for how FFmpeg should process your files"
+    )
+    
+    # Example prompts
+    with st.expander("📝 Example FFmpeg Prompts"):
+        st.markdown("""
+        **Basic Slideshow:**
+        ```
+        Create a video slideshow using the audio file and images. Show each image for 3 seconds with crossfade transitions.
+        ```
+        
+        **Synchronized Video:**
+        ```
+        Create a video by syncing images with audio timing. Use subtitle timing to match images with corresponding audio segments.
+        ```
+        
+        **Advanced Effects:**
+        ```
+        Create a cinematic video with the audio and images. Add ken burns effects, fade transitions, and ensure the final video matches the audio duration perfectly.
+        ```
+        """)
+    
+    # Cost estimate for video
+    if audio_file and images_zip and ffmpeg_prompt:
+        estimated_video_cost = 0.05  # Rough estimate
+        st.markdown(f"""
+        <div class="video-box">
+            💰 <strong>Estimated cost:</strong> ~${estimated_video_cost:.3f} USD for video generation
+        </div>
+        """, unsafe_allow_html=True)
+    
+    # Generate video
+    st.subheader("🎬 Generate Video")
+    
+    if st.button("🚀 Create Video", type="primary", use_container_width=True, key="generate_video_btn"):
+        if not audio_file:
+            st.error("❌ Please upload an audio file")
+        elif not images_zip and 'generated_images_zip' not in st.session_state:
+            st.error("❌ Please upload an images ZIP file or create one from generated images")
+        elif not ffmpeg_prompt.strip():
+            st.error("❌ Please provide FFmpeg instructions")
+        else:
+            with st.spinner("🎬 Creating your video... This may take several minutes..."):
+                try:
+                    # Use generated images ZIP if available, otherwise use uploaded ZIP
+                    zip_to_use = st.session_state.get('generated_images_zip') if 'generated_images_zip' in st.session_state else images_zip
+                    
+                    # Generate video
+                    video_result = generate_video(
+                        audio_file=audio_file,
+                        images_zip=zip_to_use,
+                        prompt=ffmpeg_prompt,
+                        max_attempts=max_attempts,
+                        client=replicate_client
+                    )
+                    
+                    if video_result:
+                        st.success("🎉 Video created successfully!")
+                        
+                        # Display video result
+                        if isinstance(video_result, str):
+                            # If it's a URL
+                            st.video(video_result)
+                            
+                            # Download video
+                            video_response = requests.get(video_result)
+                            if video_response.status_code == 200:
+                                st.download_button(
+                                    label="💾 Download Video",
+                                    data=video_response.content,
+                                    file_name="generated_video.mp4",
+                                    mime="video/mp4",
+                                    key="download_video"
+                                )
+                        elif isinstance(video_result, list) and len(video_result) > 0:
+                            # If it's a list of URLs
+                            video_url = video_result[0]
+                            st.video(video_url)
+                            
+                            # Download video
+                            video_response = requests.get(video_url)
+                            if video_response.status_code == 200:
+                                st.download_button(
+                                    label="💾 Download Video",
+                                    data=video_response.content,
+                                    file_name="generated_video.mp4",
+                                    mime="video/mp4",
+                                    key="download_video"
+                                )
+                        else:
+                            st.warning("Video was created but format is unexpected. Check the result:")
+                            st.write(video_result)
+                    
+                except Exception as e:
+                    st.error(f"❌ Error creating video: {str(e)}")
 
 # Footer
 st.markdown("---")
 st.markdown(
-    "<div style='text-align: center; color: #666;'>🚀 Built with Streamlit | 🤖 Powered by Flux AI & Gemini</div>", 
+    "<div style='text-align: center; color: #666;'>🚀 Built with Streamlit | 🤖 Powered by Flux AI, Gemini & FFmpeg</div>", 
     unsafe_allow_html=True
 )
