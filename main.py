@@ -211,7 +211,7 @@ def generate_audio(text: str, voice_id: str, speed: float, volume: float, pitch:
     """Generate audio using MiniMax model"""
     try:
         output = client.run(
-            "minimax/speech-01",
+            "minimax/speech-02-turbo",
             input={
                 "text": text,
                 "voice_id": voice_id,
