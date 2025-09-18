@@ -207,6 +207,27 @@ def generate_image(prompt: str, client) -> Image.Image:
         st.error(f"Error generating image: {str(e)}")
         return None
 
+def generate_audio(text: str, voice_id: str, speed: float, volume: float, pitch: float, client):
+    """Generate audio using MiniMax model"""
+    try:
+        output = client.run(
+            "minimax/speech-01",
+            input={
+                "text": text,
+                "voice_id": voice_id,
+                "speed": speed,
+                "volume": volume,
+                "pitch": pitch,
+                "english_normalization": True,
+                "language_boost": "english"
+            }
+        )
+        
+        return output
+    except Exception as e:
+        st.error(f"Error generating audio: {str(e)}")
+        return None
+
 def generate_video(audio_file, images_zip, prompt: str, max_attempts: int, client):
     """Generate video using FFmpeg model"""
     try:
@@ -236,10 +257,188 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # Tab Navigation
-tab1, tab2 = st.tabs(["🖼️ Image Generation", "🎥 Video Creation"])
+tab1, tab2, tab3 = st.tabs(["🎤 Audio Generation", "🖼️ Image Generation", "🎥 Video Creation"])
+
+# ===== AUDIO GENERATION TAB =====
+with tab1:
+    # Sidebar Configuration for Audio Generation
+    with st.sidebar:
+        st.header("🎤 Audio Configuration")
+        
+        voice_id = st.selectbox(
+            "Voice Selection",
+            options=[
+                "Wise_Woman", "Friendly_Person", "Inspirational_girl", "Deep_Voice_Man",
+                "Calm_Woman", "Casual_Guy", "Lively_Girl", "Patient_Man",
+                "Young_Knight", "Determined_Man", "Lovely_Girl", "Decent_Boy",
+                "Imposing_Manner", "Elegant_Man", "Abbess", "Sweet_Girl_2", "Exuberant_Girl"
+            ],
+            index=0,
+            help="Choose the voice character for audio generation"
+        )
+        
+        st.markdown("---")
+        
+        speed = st.slider(
+            "🚀 Speed",
+            min_value=0.5,
+            max_value=2.0,
+            value=1.0,
+            step=0.1,
+            help="Audio playback speed"
+        )
+        
+        volume = st.slider(
+            "🔊 Volume",
+            min_value=0.1,
+            max_value=2.0,
+            value=1.0,
+            step=0.1,
+            help="Audio volume level"
+        )
+        
+        pitch = st.slider(
+            "🎵 Pitch",
+            min_value=0.5,
+            max_value=2.0,
+            value=1.0,
+            step=0.1,
+            help="Audio pitch adjustment"
+        )
+        
+        st.markdown("---")
+        st.info("🌐 Language: English\n📝 Normalization: Enabled")
+
+    # Main Content for Audio Generation
+    st.subheader("🎤 Text-to-Speech Generator")
+    
+    st.markdown("""
+    <div class="info-box">
+        🎯 <strong>Audio Generation Process:</strong><br>
+        1. Enter your text content<br>
+        2. Choose voice and adjust settings<br>
+        3. Generate high-quality audio<br>
+        4. Download your audio file!
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Text input for audio generation
+    audio_text = st.text_area(
+        "📝 Text to Convert",
+        placeholder="Enter the text you want to convert to speech...",
+        height=150,
+        help="Enter the text that will be converted to audio using AI voice synthesis"
+    )
+    
+    # SRT file option for audio generation
+    st.markdown("---")
+    st.subheader("📁 Or Upload SRT File for Audio")
+    
+    srt_for_audio = st.file_uploader(
+        "Choose SRT file to convert to audio",
+        type=['srt'],
+        help="Upload an SRT file to extract and convert text to audio",
+        key="audio_srt_upload"
+    )
+    
+    # Process SRT for audio if uploaded
+    if srt_for_audio is not None:
+        try:
+            try:
+                srt_content = srt_for_audio.read().decode('utf-8')
+            except UnicodeDecodeError:
+                srt_for_audio.seek(0)
+                srt_content = srt_for_audio.read().decode('latin-1')
+            
+            subtitles = parse_srt(srt_content)
+            
+            if subtitles:
+                # Extract all text from subtitles
+                all_text = " ".join([subtitle[3] for subtitle in subtitles])
+                
+                st.success(f"✅ Extracted text from {len(subtitles)} subtitles")
+                
+                # Option to use extracted text
+                if st.button("📋 Use Extracted Text", use_container_width=True, key="use_extracted_text"):
+                    audio_text = all_text
+                    st.text_area("📝 Extracted Text", value=all_text, height=150, key="extracted_text_display")
+                
+                # Preview extracted text
+                with st.expander("👀 Preview Extracted Text"):
+                    st.write(all_text[:500] + "..." if len(all_text) > 500 else all_text)
+        
+        except Exception as e:
+            st.error(f"❌ Error processing SRT file: {str(e)}")
+    
+    # Generate audio button and cost estimate
+    if audio_text.strip():
+        # Cost estimate
+        word_count = len(audio_text.split())
+        estimated_audio_cost = word_count * 0.0001  # Rough estimate
+        
+        st.markdown(f"""
+        <div class="info-box">
+            📊 <strong>Text Stats:</strong> {word_count} words, {len(audio_text)} characters<br>
+            💰 <strong>Estimated cost:</strong> ~${estimated_audio_cost:.4f} USD
+        </div>
+        """, unsafe_allow_html=True)
+        
+        st.subheader("🎤 Generate Audio")
+        
+        if st.button("🚀 Generate Audio", type="primary", use_container_width=True, key="generate_audio_btn"):
+            with st.spinner("🎤 Generating audio... This may take a few moments..."):
+                try:
+                    audio_result = generate_audio(
+                        text=audio_text,
+                        voice_id=voice_id,
+                        speed=speed,
+                        volume=volume,
+                        pitch=pitch,
+                        client=replicate_client
+                    )
+                    
+                    if audio_result:
+                        st.success("🎉 Audio generated successfully!")
+                        
+                        # Handle different result formats
+                        audio_url = None
+                        if isinstance(audio_result, str):
+                            audio_url = audio_result
+                        elif isinstance(audio_result, list) and len(audio_result) > 0:
+                            audio_url = audio_result[0]
+                        
+                        if audio_url:
+                            # Display audio player
+                            st.audio(audio_url)
+                            
+                            # Download audio
+                            try:
+                                audio_response = requests.get(audio_url)
+                                if audio_response.status_code == 200:
+                                    st.download_button(
+                                        label="💾 Download Audio",
+                                        data=audio_response.content,
+                                        file_name="generated_audio.wav",
+                                        mime="audio/wav",
+                                        use_container_width=True,
+                                        key="download_audio"
+                                    )
+                                else:
+                                    st.error("Failed to download audio file")
+                            except Exception as e:
+                                st.error(f"Error downloading audio: {str(e)}")
+                        else:
+                            st.warning("Audio was generated but format is unexpected. Check the result:")
+                            st.write(audio_result)
+                
+                except Exception as e:
+                    st.error(f"❌ Error generating audio: {str(e)}")
+    
+    else:
+        st.info("👆 Enter text above or upload an SRT file to generate audio")
 
 # ===== IMAGE GENERATION TAB =====
-with tab1:
+with tab2:
     # Sidebar Configuration for Image Generation
     with st.sidebar:
         st.header("⚙️ Image Configuration")
@@ -449,11 +648,11 @@ with tab1:
                     if image:
                         generated_images.append((image, description, original_text, timestamp))
                         
-                        # Prepare for download
+                        # Prepare for download with sequential naming
                         buf = BytesIO()
                         image.save(buf, format='PNG')
                         buf.seek(0)
-                        image_data_for_download.append((buf.getvalue(), f"{timestamp}.png"))
+                        image_data_for_download.append((buf.getvalue(), f"image{i+1:04d}.png"))
                 
                 progress_bar.progress(1.0)
                 status_text.success(f"🎉 Generated {len(generated_images)} images!")
@@ -487,7 +686,7 @@ with tab1:
                     # Display images
                     for i, (image, description, original_text, timestamp) in enumerate(st.session_state.generated_images):
                         with st.container():
-                            st.markdown(f"### 🎬 Scene {i+1}: `{timestamp}`")
+                            st.markdown(f"### 🎬 Scene {i+1}: `image{i+1:04d}.png`")
                             
                             img_col, info_col = st.columns([3, 2])
                             
@@ -508,9 +707,9 @@ with tab1:
                                 st.download_button(
                                     label="💾 Download",
                                     data=buf.getvalue(),
-                                    file_name=f"scene_{i+1}_{timestamp}.png",
+                                    file_name=f"image{i+1:04d}.png",
                                     mime="image/png",
-                                    key=f"download_individual_{i}_{timestamp}",
+                                    key=f"download_individual_{i}",
                                     use_container_width=True
                                 )
                             
@@ -543,7 +742,7 @@ with tab1:
         
         # Display previous images
         for i, (image, description, original_text, timestamp) in enumerate(st.session_state.generated_images):
-            with st.expander(f"🎬 Scene {i+1}: {timestamp}"):
+            with st.expander(f"🎬 Scene {i+1}: image{i+1:04d}.png"):
                 img_col, info_col = st.columns([2, 1])
                 with img_col:
                     st.image(image, use_container_width=True)
@@ -560,14 +759,14 @@ with tab1:
                     st.download_button(
                         label="💾 Download",
                         data=buf.getvalue(),
-                        file_name=f"scene_{i+1}_{timestamp}.png",
+                        file_name=f"image{i+1:04d}.png",
                         mime="image/png",
-                        key=f"download_previous_{i}_{timestamp}",
+                        key=f"download_previous_{i}",
                         use_container_width=True
                     )
 
 # ===== VIDEO CREATION TAB =====
-with tab2:
+with tab3:
     st.subheader("🎥 Video Creation with FFmpeg")
     
     # Sidebar for Video Configuration
@@ -632,13 +831,11 @@ with tab2:
         st.subheader("🖼️ Use Generated Images")
         
         if st.button("📦 Create ZIP from Generated Images", use_container_width=True, key="create_zip_from_generated"):
-            # Create ZIP from generated images
+            # Create ZIP from generated images (they're already named sequentially)
             zip_buffer = BytesIO()
             with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-                for i, (img_data, filename) in enumerate(st.session_state.image_data_for_download):
-                    # Rename files to be sequential for video
-                    new_filename = f"image_{i+1:03d}.png"
-                    zip_file.writestr(new_filename, img_data)
+                for img_data, filename in st.session_state.image_data_for_download:
+                    zip_file.writestr(filename, img_data)
             
             zip_buffer.seek(0)
             st.session_state.generated_images_zip = zip_buffer.getvalue()
