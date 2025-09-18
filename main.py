@@ -219,7 +219,7 @@ def generate_audio(text: str, voice_id: str, speed: float, volume: float, pitch:
                 "volume": volume,
                 "pitch": pitch,
                 "english_normalization": True,
-                "language_boost": "english"
+                "language_boost": "English"
             }
         )
         
