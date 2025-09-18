@@ -955,6 +955,6 @@ with tab3:
 # Footer
 st.markdown("---")
 st.markdown(
-    "<div style='text-align: center; color: #666;'>🚀 Built with Streamlit | 🤖 Powered by Flux AI, Gemini & FFmpeg</div>", 
+    "<div style='text-align: center; color: #666;'>🚀 Built with Streamlit | 🤖 Powered by Flux AI, Gemini & FFmpeg | Made By Mathew G.</div>", 
     unsafe_allow_html=True
 )
