@@ -211,25 +211,22 @@ def generate_image(prompt: str, client) -> Image.Image:
         st.error(f"Error generating image: {str(e)}")
         return None
 
-# MINIMAX AUDIO GENERATION FUNCTIONS (REST API)
-def generate_audio_minimax(text: str, voice_id: str, speed: float, vol: float, 
-                          pitch: float, english_normalization: bool, api_key: str,
-                          sample_rate: int = 32000, bitrate: int = 128000, 
-                          file_format: str = "wav"):
-    """Generate audio using MiniMax REST API"""
+# MINIMAX AUDIO GENERATION FUNCTIONS (Proper API Workflow)
+def create_speech_task(text: str, voice_id: str, speed: float, vol: float, 
+                      pitch: float, english_normalization: bool, api_key: str,
+                      sample_rate: int = 32000, bitrate: int = 128000, 
+                      file_format: str = "wav", model: str = "speech-2.5-hd-preview"):
+    """Step 1: Create a speech generation task and get task_id"""
     
-    # MiniMax API endpoint
-    url = "https://api.minimax.io/v1/files/upload"
+    url = "https://api.minimax.chat/v1/t2a_v2"
     
-    # Request headers
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json"
     }
     
-    # Request payload
     payload = {
-        "model": "speech-2.5-hd-preview",
+        "model": model,
         "text": text,
         "voice_setting": {
             "voice_id": voice_id,
@@ -247,210 +244,236 @@ def generate_audio_minimax(text: str, voice_id: str, speed: float, vol: float,
     }
     
     try:
-        st.info(f"🎤 Connecting to MiniMax API...")
-        st.info(f"📝 Text length: {len(text)} characters")
-        st.info(f"🎵 Voice: {voice_id}, Speed: {speed}, Volume: {vol}, Pitch: {pitch}")
+        response = requests.post(url, headers=headers, json=payload, timeout=30)
         
-        # Make the API request
-        response = requests.post(url, headers=headers, json=payload, timeout=60)
-        
-        # Check response status
         if response.status_code == 200:
-            st.success("✅ MiniMax API request successful!")
+            task_data = response.json()
             
-            # Check if response is JSON (async task) or direct audio
-            content_type = response.headers.get('content-type', '')
+            # Check for MiniMax error format
+            if 'base_resp' in task_data:
+                base_resp = task_data['base_resp']
+                status_code = base_resp.get('status_code', 0)
+                status_msg = base_resp.get('status_msg', 'Unknown error')
+                
+                if status_code != 0:
+                    return None, f"MiniMax Error {status_code}: {status_msg}"
             
-            if 'application/json' in content_type:
-                # Handle JSON response
-                task_data = response.json()
-                
-                # Check for MiniMax error format
-                if 'base_resp' in task_data:
-                    base_resp = task_data['base_resp']
-                    status_code = base_resp.get('status_code', 0)
-                    status_msg = base_resp.get('status_msg', 'Unknown error')
-                    
-                    if status_code == 2049:
-                        st.error("❌ Invalid API Key")
-                        st.error("🔧 **How to fix this:**")
-                        st.error("1. Check your MiniMax API key in Streamlit secrets")
-                        st.error("2. Make sure the key starts with 'sk-' or the correct format")
-                        st.error("3. Verify the key has TTS (Text-to-Speech) permissions")
-                        st.error("4. Try regenerating your API key from MiniMax dashboard")
-                        return None
-                    elif status_code == 2050:
-                        st.error("❌ Insufficient quota or credits")
-                        return None
-                    elif status_code == 2051:
-                        st.error("❌ Model not available or access denied")
-                        return None
-                    elif status_code != 0:
-                        st.error(f"❌ MiniMax Error {status_code}: {status_msg}")
-                        return None
-                
-                # Check for successful task creation
-                if 'task_id' in task_data:
-                    # Poll for task completion
-                    return poll_task_completion(task_data['task_id'], api_key)
-                elif 'audio' in task_data:
-                    # Direct audio data in JSON
-                    audio_data = base64.b64decode(task_data['audio'])
-                    return audio_data
-                elif 'data' in task_data and 'audio' in task_data['data']:
-                    # Audio data nested in 'data' field
-                    audio_data = base64.b64decode(task_data['data']['audio'])
-                    return audio_data
-                else:
-                    st.error(f"❌ Unexpected JSON response format")
-                    st.json(task_data)  # Show the actual response for debugging
-                    return None
-                    
-            elif 'audio' in content_type:
-                # Direct audio response
-                st.success(f"🎉 Received audio data ({len(response.content)} bytes)")
-                return response.content
-                
+            # Extract task_id
+            if 'task_id' in task_data:
+                return task_data['task_id'], None
+            elif 'data' in task_data and 'task_id' in task_data['data']:
+                return task_data['data']['task_id'], None
             else:
-                st.error(f"❌ Unexpected content type: {content_type}")
-                st.error(f"Response preview: {response.text[:200]}...")
-                return None
+                return None, f"No task_id in response: {task_data}"
                 
-        elif response.status_code == 401:
-            st.error("❌ Authentication failed (HTTP 401)")
-            st.error("🔧 **How to fix this:**")
-            st.error("1. Verify your MINIMAX_API_KEY in Streamlit secrets")
-            st.error("2. Make sure the key format is correct")
-            st.error("3. Check that the key hasn't expired")
-            return None
-            
-        elif response.status_code == 400:
-            try:
-                error_data = response.json()
-                if 'base_resp' in error_data:
-                    status_msg = error_data['base_resp'].get('status_msg', 'Bad request')
-                    st.error(f"❌ Bad Request: {status_msg}")
-                else:
-                    error_msg = error_data.get('message', 'Bad request')
-                    st.error(f"❌ Bad Request: {error_msg}")
-                
-                # Provide specific guidance
-                st.error("🔧 **Common fixes:**")
-                st.error("• Try a different voice from the dropdown")
-                st.error("• Check if text contains unsupported characters")
-                st.error("• Reduce text length if it's too long")
-                st.error("• Verify model name is correct")
-                    
-            except:
-                st.error(f"❌ Bad Request (400): {response.text}")
-            return None
-            
-        elif response.status_code == 403:
-            st.error("❌ Access forbidden (HTTP 403)")
-            st.error("🔧 Your API key may not have TTS permissions")
-            return None
-            
-        elif response.status_code == 429:
-            st.error("❌ Rate limit exceeded (HTTP 429)")
-            st.error("🔧 Please wait a moment and try again")
-            return None
-            
         else:
-            st.error(f"❌ API request failed: HTTP {response.status_code}")
+            return None, f"HTTP {response.status_code}: {response.text}"
             
-            # Try to parse error response
-            try:
-                error_data = response.json()
-                if 'base_resp' in error_data:
-                    status_msg = error_data['base_resp'].get('status_msg', 'Unknown error')
-                    st.error(f"Error details: {status_msg}")
-                st.json(error_data)
-            except:
-                st.error(f"Response: {response.text}")
-            return None
-            
-    except requests.exceptions.Timeout:
-        st.error("❌ Request timeout - please try again")
-        return None
-        
-    except requests.exceptions.ConnectionError:
-        st.error("❌ Connection error - please check your internet connection")
-        return None
-        
     except Exception as e:
-        st.error(f"❌ Unexpected error: {str(e)}")
-        return None
+        return None, f"Request failed: {str(e)}"
 
-def poll_task_completion(task_id: str, api_key: str, max_attempts: int = 30):
-    """Poll for async task completion"""
+def check_task_status(task_id: str, api_key: str):
+    """Step 2: Check the status of a speech generation task"""
     
-    poll_url = f"https://api.minimax.chat/v1/task_status/{task_id}"
+    url = f"https://api.minimax.chat/v1/query/t2a_v2/{task_id}"
+    
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json"
     }
     
-    st.info(f"📋 Task ID: {task_id}")
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        
+        if response.status_code == 200:
+            status_data = response.json()
+            
+            # Check for MiniMax error format
+            if 'base_resp' in status_data:
+                base_resp = status_data['base_resp']
+                status_code = base_resp.get('status_code', 0)
+                status_msg = base_resp.get('status_msg', 'Unknown error')
+                
+                if status_code != 0:
+                    return "failed", None, f"Error {status_code}: {status_msg}"
+            
+            # Extract status and file_id
+            if 'data' in status_data:
+                data = status_data['data']
+                task_status = data.get('status', 'unknown')
+                file_id = data.get('file_id', None)
+                return task_status, file_id, None
+            else:
+                task_status = status_data.get('status', 'unknown')
+                file_id = status_data.get('file_id', None)
+                return task_status, file_id, None
+                
+        else:
+            return "failed", None, f"HTTP {response.status_code}: {response.text}"
+            
+    except Exception as e:
+        return "failed", None, f"Request failed: {str(e)}"
+
+def download_audio_file(file_id: str, api_key: str):
+    """Step 3: Download the audio file using file_id"""
+    
+    url = f"https://api.minimax.chat/v1/files/retrieve"
+    
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+    
+    payload = {
+        "file_id": file_id
+    }
+    
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=60)
+        
+        if response.status_code == 200:
+            # Check if response contains download URL or direct audio data
+            content_type = response.headers.get('content-type', '')
+            
+            if 'application/json' in content_type:
+                file_data = response.json()
+                
+                # Check for error in response
+                if 'base_resp' in file_data:
+                    base_resp = file_data['base_resp']
+                    status_code = base_resp.get('status_code', 0)
+                    if status_code != 0:
+                        return None, f"Download error {status_code}: {base_resp.get('status_msg', 'Unknown error')}"
+                
+                # Look for download URL
+                if 'file' in file_data and 'download_url' in file_data['file']:
+                    download_url = file_data['file']['download_url']
+                    
+                    # Download from URL
+                    audio_response = requests.get(download_url, timeout=60)
+                    if audio_response.status_code == 200:
+                        return audio_response.content, None
+                    else:
+                        return None, f"Failed to download from URL: HTTP {audio_response.status_code}"
+                
+                elif 'download_url' in file_data:
+                    download_url = file_data['download_url']
+                    
+                    # Download from URL
+                    audio_response = requests.get(download_url, timeout=60)
+                    if audio_response.status_code == 200:
+                        return audio_response.content, None
+                    else:
+                        return None, f"Failed to download from URL: HTTP {audio_response.status_code}"
+                
+                else:
+                    return None, f"No download URL in response: {file_data}"
+            
+            elif 'audio' in content_type:
+                # Direct audio content
+                return response.content, None
+            
+            else:
+                return None, f"Unexpected content type: {content_type}"
+                
+        else:
+            return None, f"Download failed: HTTP {response.status_code}: {response.text}"
+            
+    except Exception as e:
+        return None, f"Download request failed: {str(e)}"
+
+def generate_audio_minimax(text: str, voice_id: str, speed: float, vol: float, 
+                          pitch: float, english_normalization: bool, api_key: str,
+                          sample_rate: int = 32000, bitrate: int = 128000, 
+                          file_format: str = "wav", model: str = "speech-2.5-hd-preview"):
+    """Complete MiniMax TTS workflow: Create task -> Poll status -> Download audio"""
+    
+    # Step 1: Create speech generation task
+    st.info("📝 Step 1: Creating speech generation task...")
+    task_id, error = create_speech_task(
+        text, voice_id, speed, vol, pitch, english_normalization, 
+        api_key, sample_rate, bitrate, file_format, model
+    )
+    
+    if error:
+        st.error(f"❌ Task creation failed: {error}")
+        
+        # Provide specific troubleshooting for common errors
+        if "1000" in error:
+            st.error("🔧 **Error 1000 troubleshooting:**")
+            st.error("• Try voice_male_1 or voice_female_1")
+            st.error("• Use a different model (speech-01-turbo)")
+            st.error("• Shorten your text")
+            st.error("• Check if your account has access to this model")
+        elif "2049" in error:
+            st.error("🔧 **Invalid API key - please check your MINIMAX_API_KEY**")
+        elif "2050" in error:
+            st.error("🔧 **Insufficient credits - check your account balance**")
+        elif "2051" in error:
+            st.error("🔧 **Model access denied - try a different model**")
+        
+        return None
+    
+    st.success(f"✅ Task created successfully! Task ID: {task_id}")
+    
+    # Step 2: Poll task status
+    st.info("⏳ Step 2: Checking task status...")
+    
+    max_attempts = 60  # 60 attempts with 2-second intervals = 2 minutes max
     progress_bar = st.progress(0)
     status_text = st.empty()
     
     for attempt in range(max_attempts):
-        try:
-            status_text.text(f"⏳ Checking task status... (attempt {attempt + 1}/{max_attempts})")
+        status_text.text(f"⏳ Checking status... (attempt {attempt + 1}/{max_attempts})")
+        progress = min(0.9, attempt / max_attempts)
+        progress_bar.progress(progress)
+        
+        task_status, file_id, error = check_task_status(task_id, api_key)
+        
+        if error:
+            st.error(f"❌ Status check failed: {error}")
+            return None
+        
+        if task_status == "Success" or task_status == "completed":
+            progress_bar.progress(1.0)
+            status_text.success("✅ Task completed successfully!")
             
-            response = requests.get(poll_url, headers=headers, timeout=10)
+            if not file_id:
+                st.error("❌ Task completed but no file_id received")
+                return None
             
-            if response.status_code == 200:
-                task_data = response.json()
-                status = task_data.get('status', 'unknown')
-                
-                if status == 'completed':
-                    progress_bar.progress(1.0)
-                    status_text.success("✅ Task completed!")
-                    
-                    # Get the audio data
-                    if 'result' in task_data and 'audio' in task_data['result']:
-                        audio_data = base64.b64decode(task_data['result']['audio'])
-                        return audio_data
-                    elif 'audio_url' in task_data:
-                        # Download from URL
-                        audio_response = requests.get(task_data['audio_url'])
-                        if audio_response.status_code == 200:
-                            return audio_response.content
-                    
-                    st.error("❌ Task completed but no audio data found")
-                    return None
-                    
-                elif status == 'failed':
-                    progress_bar.progress(1.0)
-                    error_msg = task_data.get('error', 'Task failed')
-                    status_text.error(f"❌ Task failed: {error_msg}")
-                    return None
-                    
-                elif status in ['pending', 'processing', 'running']:
-                    progress = min(0.9, (attempt + 1) / max_attempts)
-                    progress_bar.progress(progress)
-                    time.sleep(2)  # Wait 2 seconds before next poll
-                    continue
-                    
-                else:
-                    st.warning(f"⚠️ Unknown status: {status}")
-                    time.sleep(2)
-                    continue
-                    
-            else:
-                st.warning(f"⚠️ Status check failed: HTTP {response.status_code}")
-                time.sleep(2)
-                continue
-                
-        except Exception as e:
-            st.warning(f"⚠️ Error checking status: {str(e)}")
+            # Step 3: Download audio file
+            st.info(f"📥 Step 3: Downloading audio file (ID: {file_id})...")
+            st.warning("⚠️ Note: Download URL expires in 9 hours")
+            
+            audio_data, download_error = download_audio_file(file_id, api_key)
+            
+            if download_error:
+                st.error(f"❌ Download failed: {download_error}")
+                return None
+            
+            st.success(f"🎉 Audio downloaded successfully! ({len(audio_data)} bytes)")
+            return audio_data
+            
+        elif task_status == "Failed" or task_status == "failed":
+            progress_bar.progress(1.0)
+            status_text.error("❌ Task failed")
+            return None
+            
+        elif task_status in ["Processing", "processing", "Pending", "pending", "Running", "running"]:
+            # Task still in progress, continue polling
+            time.sleep(2)
+            continue
+            
+        else:
+            st.warning(f"⚠️ Unknown status: {task_status}")
             time.sleep(2)
             continue
     
     # Timeout
     progress_bar.progress(1.0)
-    status_text.error("❌ Task timeout - please try again with shorter text")
+    status_text.error("❌ Task timeout - processing took too long")
+    st.error("🔧 Try with shorter text or try again later")
     return None
 
 def generate_video(audio_file, images_zip, prompt: str, max_attempts: int, client):
@@ -493,16 +516,17 @@ with tab1:
         voice_id = st.selectbox(
             "Voice Selection",
             options=[
+                "voice_male_1",
+                "voice_female_1", 
+                "voice_male_2",
+                "voice_female_2",
+                "voice_male_3",
+                "voice_female_3",
                 "English_expressive_narrator",
                 "English_cheerful_male",
                 "English_calm_female",
                 "English_professional_male",
-                "English_warm_female",
-                "English_confident_male",
-                "English_gentle_female",
-                "English_dynamic_male",
-                "English_soothing_female",
-                "English_energetic_male"
+                "English_warm_female"
             ],
             index=0,
             help="Choose the voice character for audio generation"
@@ -570,7 +594,32 @@ with tab1:
         )
         
         st.markdown("---")
-        st.info("🌐 Model: speech-2.5-hd-preview\n🎤 MiniMax API")
+        
+        # Alternative models section
+        st.subheader("🔄 Alternative Settings")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            alternative_model = st.selectbox(
+                "Try Different Model",
+                options=[
+                    "speech-2.5-hd-preview",
+                    "speech-01-turbo", 
+                    "speech-01",
+                    "tts-1",
+                    "tts-1-hd"
+                ],
+                index=0,
+                help="Try different models if one doesn't work"
+            )
+        
+        with col2:
+            use_alternative = st.checkbox(
+                "Use Alternative Model",
+                help="Enable to use the selected alternative model"
+            )
+        
+        st.info("💡 If you get Error 1000, try:\n• Different voice (voice_male_1, voice_female_1)\n• Alternative model\n• Shorter text\n• Wait and retry")
 
     # Main Content for Audio Generation
     st.subheader("🎤 Text-to-Speech Generator")
@@ -654,6 +703,9 @@ with tab1:
         if st.button("🚀 Generate Audio", type="primary", use_container_width=True, key="generate_audio_btn"):
             with st.spinner("🎤 Generating audio with MiniMax... This may take a few moments..."):
                 try:
+                    # Determine which model to use
+                    model_to_use = alternative_model if use_alternative else "speech-2.5-hd-preview"
+                    
                     audio_data = generate_audio_minimax(
                         text=audio_text,
                         voice_id=voice_id,
@@ -664,7 +716,8 @@ with tab1:
                         api_key=minimax_api_key,
                         sample_rate=sample_rate,
                         bitrate=bitrate,
-                        file_format=file_format
+                        file_format=file_format,
+                        model=model_to_use
                     )
                     
                     if audio_data:
