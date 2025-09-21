@@ -218,10 +218,10 @@ def create_speech_task(text: str, voice_id: str, speed: float, vol: float,
                       file_format: str = "wav", model: str = "speech-2.5-hd-preview"):
     """Step 1: Create a speech generation task and get task_id"""
     
-    url = "https://api.minimax.chat/v1/t2a_v2"
+    url = "https://api.minimax.io/v1/t2a_async_v2"
     
     headers = {
-        "Authorization": f"Bearer {api_key}",
+        "Authorization": f"Bearer {minimax_api_key}",
         "Content-Type": "application/json"
     }
     
