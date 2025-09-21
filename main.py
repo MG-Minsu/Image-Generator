@@ -7,6 +7,10 @@ import re
 from typing import List, Tuple
 import zipfile
 import google.generativeai as genai
+import asyncio
+import websockets
+import json
+import base64
 
 # Set page config
 st.set_page_config(
@@ -69,7 +73,8 @@ def init_apis():
         replicate_client = replicate.Client(api_token=st.secrets["REPLICATE_API_TOKEN"])
         genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
         gemini_model = genai.GenerativeModel('gemini-2.5-flash')
-        return replicate_client, gemini_model
+        minimax_api_key = st.secrets["MINIMAX_API_KEY"]
+        return replicate_client, gemini_model, minimax_api_key
     except Exception as e:
         st.error("❌ Please configure your API keys in Streamlit secrets")
         st.stop()
@@ -207,25 +212,128 @@ def generate_image(prompt: str, client) -> Image.Image:
         st.error(f"Error generating image: {str(e)}")
         return None
 
-def generate_audio(text: str, voice_id: str, speed: float, volume: float, pitch: float, client):
-    """Generate audio using MiniMax model"""
-    try:
-        output = client.run(
-            "minimax/speech-02-turbo",
-            input={
-                "text": text,
-                "voice_id": voice_id,
-                "speed": speed,
-                "volume": volume,
-                "pitch": pitch,
-                "english_normalization": True,
-                "language_boost": "English"
-            }
-        )
+# NEW MINIMAX AUDIO GENERATION FUNCTIONS
+async def start_task(websocket, voice_id: str, speed: float, vol: float, pitch: float, 
+                     sample_rate: int = 32000, bitrate: int = 128000, 
+                     file_format: str = "wav", english_normalization: bool = False):
+    """Send task start request to MiniMax API"""
+    start_msg = {
+        "event": "task_start",
+        "model": "speech-2.5-hd-preview",
+        "voice_setting": {
+            "voice_id": voice_id,
+            "speed": speed,
+            "vol": vol,
+            "pitch": pitch,
+            "english_normalization": english_normalization
+        },
+        "audio_setting": {
+            "sample_rate": sample_rate,
+            "bitrate": bitrate,
+            "format": file_format,
+            "channel": 1
+        }
+    }
+    await websocket.send(json.dumps(start_msg))
+    response = json.loads(await websocket.recv())
+    return response.get("event") == "task_started"
+
+async def send_text_chunks(websocket, text: str, chunk_size: int = 200):
+    """Send text in chunks to MiniMax API"""
+    # Split text into chunks
+    words = text.split()
+    chunks = []
+    current_chunk = []
+    current_length = 0
+    
+    for word in words:
+        if current_length + len(word) + 1 > chunk_size and current_chunk:
+            chunks.append(' '.join(current_chunk))
+            current_chunk = [word]
+            current_length = len(word)
+        else:
+            current_chunk.append(word)
+            current_length += len(word) + 1
+    
+    if current_chunk:
+        chunks.append(' '.join(current_chunk))
+    
+    # Send chunks
+    for i, chunk in enumerate(chunks):
+        is_last = i == len(chunks) - 1
+        text_msg = {
+            "event": "text_stream",
+            "text": chunk,
+            "stream_finished": is_last
+        }
+        await websocket.send(json.dumps(text_msg))
+    
+    return len(chunks)
+
+async def receive_audio_data(websocket):
+    """Receive audio data from MiniMax API"""
+    audio_data = BytesIO()
+    
+    while True:
+        try:
+            response = await websocket.recv()
+            data = json.loads(response)
+            
+            if data.get("event") == "audio_stream":
+                # Decode base64 audio data
+                audio_chunk = base64.b64decode(data.get("audio", ""))
+                audio_data.write(audio_chunk)
+            
+            elif data.get("event") == "task_finished":
+                break
+                
+            elif data.get("event") == "error":
+                raise Exception(f"MiniMax API error: {data.get('message', 'Unknown error')}")
+                
+        except websockets.exceptions.ConnectionClosed:
+            break
+        except Exception as e:
+            st.error(f"Error receiving audio data: {str(e)}")
+            break
+    
+    audio_data.seek(0)
+    return audio_data.getvalue()
+
+def generate_audio_minimax(text: str, voice_id: str, speed: float, vol: float, 
+                          pitch: float, english_normalization: bool, api_key: str):
+    """Generate audio using MiniMax API with WebSocket"""
+    async def _generate():
+        uri = f"wss://api.minimax.chat/v1/t2a_pro_async?Authorization=Bearer {api_key}"
         
-        return output
+        try:
+            async with websockets.connect(uri) as websocket:
+                # Start task
+                task_started = await start_task(
+                    websocket, voice_id, speed, vol, pitch, 
+                    english_normalization=english_normalization
+                )
+                
+                if not task_started:
+                    raise Exception("Failed to start MiniMax task")
+                
+                # Send text chunks
+                await send_text_chunks(websocket, text)
+                
+                # Receive audio data
+                audio_data = await receive_audio_data(websocket)
+                
+                return audio_data
+                
+        except Exception as e:
+            raise Exception(f"MiniMax audio generation failed: {str(e)}")
+    
+    # Run the async function
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        return loop.run_until_complete(_generate())
     except Exception as e:
-        st.error(f"Error generating audio: {str(e)}")
+        st.error(f"Error in audio generation: {str(e)}")
         return None
 
 def generate_video(audio_file, images_zip, prompt: str, max_attempts: int, client):
@@ -246,7 +354,7 @@ def generate_video(audio_file, images_zip, prompt: str, max_attempts: int, clien
         return None
 
 # Initialize APIs
-replicate_client, gemini_model = init_apis()
+replicate_client, gemini_model, minimax_api_key = init_apis()
 
 # Header
 st.markdown("""
@@ -268,10 +376,16 @@ with tab1:
         voice_id = st.selectbox(
             "Voice Selection",
             options=[
-                "Wise_Woman", "Friendly_Person", "Inspirational_girl", "Deep_Voice_Man",
-                "Calm_Woman", "Casual_Guy", "Lively_Girl", "Patient_Man",
-                "Young_Knight", "Determined_Man", "Lovely_Girl", "Decent_Boy",
-                "Imposing_Manner", "Elegant_Man", "Abbess", "Sweet_Girl_2", "Exuberant_Girl"
+                "English_expressive_narrator",
+                "English_cheerful_male",
+                "English_calm_female",
+                "English_professional_male",
+                "English_warm_female",
+                "English_confident_male",
+                "English_gentle_female",
+                "English_dynamic_male",
+                "English_soothing_female",
+                "English_energetic_male"
             ],
             index=0,
             help="Choose the voice character for audio generation"
@@ -288,7 +402,7 @@ with tab1:
             help="Audio playback speed"
         )
         
-        volume = st.slider(
+        vol = st.slider(
             "🔊 Volume",
             min_value=0.1,
             max_value=2.0,
@@ -299,15 +413,47 @@ with tab1:
         
         pitch = st.slider(
             "🎵 Pitch",
-            min_value=0.5,
-            max_value=2.0,
-            value=1.0,
+            min_value=-1.0,
+            max_value=1.0,
+            value=0.0,
             step=0.1,
             help="Audio pitch adjustment"
         )
         
         st.markdown("---")
-        st.info("🌐 Language: English\n📝 Normalization: Enabled")
+        
+        # Audio quality settings
+        st.subheader("🎧 Audio Quality")
+        
+        sample_rate = st.selectbox(
+            "Sample Rate",
+            options=[16000, 22050, 32000, 44100, 48000],
+            index=2,  # 32000 default
+            help="Audio sample rate in Hz"
+        )
+        
+        bitrate = st.selectbox(
+            "Bitrate",
+            options=[64000, 96000, 128000, 192000, 256000, 320000],
+            index=2,  # 128000 default
+            help="Audio bitrate in bps"
+        )
+        
+        file_format = st.selectbox(
+            "Format",
+            options=["wav", "mp3"],
+            index=0,
+            help="Output audio format"
+        )
+        
+        english_normalization = st.checkbox(
+            "English Normalization",
+            value=False,
+            help="Enable English text normalization"
+        )
+        
+        st.markdown("---")
+        st.info("🌐 Model: speech-2.5-hd-preview\n🎤 MiniMax API")
 
     # Main Content for Audio Generation
     st.subheader("🎤 Text-to-Speech Generator")
@@ -317,7 +463,7 @@ with tab1:
         🎯 <strong>Audio Generation Process:</strong><br>
         1. Enter your text content<br>
         2. Choose voice and adjust settings<br>
-        3. Generate high-quality audio<br>
+        3. Generate high-quality audio with MiniMax<br>
         4. Download your audio file!
     </div>
     """, unsafe_allow_html=True)
@@ -327,7 +473,7 @@ with tab1:
         "📝 Text to Convert",
         placeholder="Enter the text you want to convert to speech...",
         height=150,
-        help="Enter the text that will be converted to audio using AI voice synthesis"
+        help="Enter the text that will be converted to audio using MiniMax AI voice synthesis"
     )
     
     # SRT file option for audio generation
@@ -372,67 +518,61 @@ with tab1:
     
     # Generate audio button and cost estimate
     if audio_text.strip():
-        # Cost estimate
+        # Cost estimate (MiniMax pricing may differ)
         word_count = len(audio_text.split())
-        estimated_audio_cost = word_count * 0.0001  # Rough estimate
+        char_count = len(audio_text)
+        estimated_audio_cost = char_count * 0.0001  # Rough estimate for MiniMax
         
         st.markdown(f"""
         <div class="info-box">
-            📊 <strong>Text Stats:</strong> {word_count} words, {len(audio_text)} characters<br>
-            💰 <strong>Estimated cost:</strong> ~${estimated_audio_cost:.4f} USD
+            📊 <strong>Text Stats:</strong> {word_count} words, {char_count} characters<br>
+            💰 <strong>Estimated cost:</strong> ~${estimated_audio_cost:.4f} USD<br>
+            🎤 <strong>Voice:</strong> {voice_id}<br>
+            🎧 <strong>Quality:</strong> {sample_rate}Hz, {bitrate}bps, {file_format.upper()}
         </div>
         """, unsafe_allow_html=True)
         
         st.subheader("🎤 Generate Audio")
         
         if st.button("🚀 Generate Audio", type="primary", use_container_width=True, key="generate_audio_btn"):
-            with st.spinner("🎤 Generating audio... This may take a few moments..."):
+            with st.spinner("🎤 Generating audio with MiniMax... This may take a few moments..."):
                 try:
-                    audio_result = generate_audio(
+                    audio_data = generate_audio_minimax(
                         text=audio_text,
                         voice_id=voice_id,
                         speed=speed,
-                        volume=volume,
+                        vol=vol,
                         pitch=pitch,
-                        client=replicate_client
+                        english_normalization=english_normalization,
+                        api_key=minimax_api_key
                     )
                     
-                    if audio_result:
-                        st.success("🎉 Audio generated successfully!")
+                    if audio_data:
+                        st.success("🎉 Audio generated successfully with MiniMax!")
                         
-                        # Handle different result formats
-                        audio_url = None
-                        if isinstance(audio_result, str):
-                            audio_url = audio_result
-                        elif isinstance(audio_result, list) and len(audio_result) > 0:
-                            audio_url = audio_result[0]
+                        # Display audio player
+                        st.audio(audio_data, format=f'audio/{file_format}')
                         
-                        if audio_url:
-                            # Display audio player
-                            st.audio(audio_url)
-                            
-                            # Download audio
-                            try:
-                                audio_response = requests.get(audio_url)
-                                if audio_response.status_code == 200:
-                                    st.download_button(
-                                        label="💾 Download Audio",
-                                        data=audio_response.content,
-                                        file_name="generated_audio.wav",
-                                        mime="audio/wav",
-                                        use_container_width=True,
-                                        key="download_audio"
-                                    )
-                                else:
-                                    st.error("Failed to download audio file")
-                            except Exception as e:
-                                st.error(f"Error downloading audio: {str(e)}")
-                        else:
-                            st.warning("Audio was generated but format is unexpected. Check the result:")
-                            st.write(audio_result)
+                        # Download audio
+                        file_extension = "wav" if file_format == "wav" else "mp3"
+                        st.download_button(
+                            label="💾 Download Audio",
+                            data=audio_data,
+                            file_name=f"minimax_generated_audio.{file_extension}",
+                            mime=f"audio/{file_format}",
+                            use_container_width=True,
+                            key="download_audio"
+                        )
+                        
+                        # Store audio in session state for video creation
+                        st.session_state.generated_audio = audio_data
+                        st.session_state.generated_audio_format = file_format
+                    else:
+                        st.error("❌ Failed to generate audio")
                 
                 except Exception as e:
                     st.error(f"❌ Error generating audio: {str(e)}")
+                    st.info("💡 Please check your MiniMax API key and internet connection")
     
     else:
         st.info("👆 Enter text above or upload an SRT file to generate audio")
@@ -807,10 +947,22 @@ with tab3:
             key="audio_upload"
         )
         
+        # Option to use generated audio
+        if 'generated_audio' in st.session_state:
+            if st.button("🎤 Use Generated Audio", use_container_width=True, key="use_generated_audio"):
+                # Create a temporary file-like object from the generated audio
+                audio_buffer = BytesIO(st.session_state.generated_audio)
+                audio_file = audio_buffer
+                st.success("✅ Using generated MiniMax audio")
+                st.audio(st.session_state.generated_audio, format=f'audio/{st.session_state.generated_audio_format}')
+        
         if audio_file:
-            st.success(f"✅ Audio uploaded: {audio_file.name}")
-            # Show audio player
-            st.audio(audio_file)
+            if not hasattr(audio_file, 'name'):
+                st.success("✅ Audio ready: Generated MiniMax audio")
+            else:
+                st.success(f"✅ Audio uploaded: {audio_file.name}")
+                # Show audio player for uploaded files
+                st.audio(audio_file)
     
     with col2:
         st.subheader("📦 Upload Images ZIP")
@@ -879,7 +1031,7 @@ with tab3:
         """)
     
     # Cost estimate for video
-    if audio_file and images_zip and ffmpeg_prompt:
+    if audio_file and (images_zip or 'generated_images_zip' in st.session_state) and ffmpeg_prompt:
         estimated_video_cost = 0.05  # Rough estimate
         st.markdown(f"""
         <div class="video-box">
@@ -892,7 +1044,7 @@ with tab3:
     
     if st.button("🚀 Create Video", type="primary", use_container_width=True, key="generate_video_btn"):
         if not audio_file:
-            st.error("❌ Please upload an audio file")
+            st.error("❌ Please upload an audio file or use generated audio")
         elif not images_zip and 'generated_images_zip' not in st.session_state:
             st.error("❌ Please upload an images ZIP file or create one from generated images")
         elif not ffmpeg_prompt.strip():
@@ -955,6 +1107,6 @@ with tab3:
 # Footer
 st.markdown("---")
 st.markdown(
-    "<div style='text-align: center; color: #666;'>🚀 Built with Streamlit | 🤖 Powered by Flux AI, Gemini & FFmpeg | Made By Mathew G.</div>", 
+    "<div style='text-align: center; color: #666;'>🚀 Built with Streamlit | 🤖 Powered by Flux AI, Gemini, MiniMax & FFmpeg | Made By Mathew G.</div>", 
     unsafe_allow_html=True
 )
