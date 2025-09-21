@@ -7,10 +7,9 @@ import re
 from typing import List, Tuple
 import zipfile
 import google.generativeai as genai
-import asyncio
-import websockets
 import json
 import base64
+import time
 
 # Set page config
 st.set_page_config(
@@ -212,14 +211,26 @@ def generate_image(prompt: str, client) -> Image.Image:
         st.error(f"Error generating image: {str(e)}")
         return None
 
-# NEW MINIMAX AUDIO GENERATION FUNCTIONS
-async def start_task(websocket, voice_id: str, speed: float, vol: float, pitch: float, 
-                     sample_rate: int = 32000, bitrate: int = 128000, 
-                     file_format: str = "wav", english_normalization: bool = False):
-    """Send task start request to MiniMax API"""
-    start_msg = {
-        "event": "task_start",
+# MINIMAX AUDIO GENERATION FUNCTIONS (REST API)
+def generate_audio_minimax(text: str, voice_id: str, speed: float, vol: float, 
+                          pitch: float, english_normalization: bool, api_key: str,
+                          sample_rate: int = 32000, bitrate: int = 128000, 
+                          file_format: str = "wav"):
+    """Generate audio using MiniMax REST API"""
+    
+    # MiniMax API endpoint
+    url = "https://api.minimax.chat/v1/text_to_speech"
+    
+    # Request headers
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+    
+    # Request payload
+    payload = {
         "model": "speech-2.5-hd-preview",
+        "text": text,
         "voice_setting": {
             "voice_id": voice_id,
             "speed": speed,
@@ -234,107 +245,164 @@ async def start_task(websocket, voice_id: str, speed: float, vol: float, pitch: 
             "channel": 1
         }
     }
-    await websocket.send(json.dumps(start_msg))
-    response = json.loads(await websocket.recv())
-    return response.get("event") == "task_started"
-
-async def send_text_chunks(websocket, text: str, chunk_size: int = 200):
-    """Send text in chunks to MiniMax API"""
-    # Split text into chunks
-    words = text.split()
-    chunks = []
-    current_chunk = []
-    current_length = 0
     
-    for word in words:
-        if current_length + len(word) + 1 > chunk_size and current_chunk:
-            chunks.append(' '.join(current_chunk))
-            current_chunk = [word]
-            current_length = len(word)
-        else:
-            current_chunk.append(word)
-            current_length += len(word) + 1
-    
-    if current_chunk:
-        chunks.append(' '.join(current_chunk))
-    
-    # Send chunks
-    for i, chunk in enumerate(chunks):
-        is_last = i == len(chunks) - 1
-        text_msg = {
-            "event": "text_stream",
-            "text": chunk,
-            "stream_finished": is_last
-        }
-        await websocket.send(json.dumps(text_msg))
-    
-    return len(chunks)
-
-async def receive_audio_data(websocket):
-    """Receive audio data from MiniMax API"""
-    audio_data = BytesIO()
-    
-    while True:
-        try:
-            response = await websocket.recv()
-            data = json.loads(response)
-            
-            if data.get("event") == "audio_stream":
-                # Decode base64 audio data
-                audio_chunk = base64.b64decode(data.get("audio", ""))
-                audio_data.write(audio_chunk)
-            
-            elif data.get("event") == "task_finished":
-                break
-                
-            elif data.get("event") == "error":
-                raise Exception(f"MiniMax API error: {data.get('message', 'Unknown error')}")
-                
-        except websockets.exceptions.ConnectionClosed:
-            break
-        except Exception as e:
-            st.error(f"Error receiving audio data: {str(e)}")
-            break
-    
-    audio_data.seek(0)
-    return audio_data.getvalue()
-
-def generate_audio_minimax(text: str, voice_id: str, speed: float, vol: float, 
-                          pitch: float, english_normalization: bool, api_key: str):
-    """Generate audio using MiniMax API with WebSocket"""
-    async def _generate():
-        uri = f"wss://api.minimax.chat/v1/t2a_pro_async?Authorization=Bearer {api_key}"
-        
-        try:
-            async with websockets.connect(uri) as websocket:
-                # Start task
-                task_started = await start_task(
-                    websocket, voice_id, speed, vol, pitch, 
-                    english_normalization=english_normalization
-                )
-                
-                if not task_started:
-                    raise Exception("Failed to start MiniMax task")
-                
-                # Send text chunks
-                await send_text_chunks(websocket, text)
-                
-                # Receive audio data
-                audio_data = await receive_audio_data(websocket)
-                
-                return audio_data
-                
-        except Exception as e:
-            raise Exception(f"MiniMax audio generation failed: {str(e)}")
-    
-    # Run the async function
     try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        return loop.run_until_complete(_generate())
-    except Exception as e:
-        st.error(f"Error in audio generation: {str(e)}")
+        st.info(f"🎤 Connecting to MiniMax API...")
+        st.info(f"📝 Text length: {len(text)} characters")
+        st.info(f"🎵 Voice: {voice_id}, Speed: {speed}, Volume: {vol}, Pitch: {pitch}")
+        
+        # Make the API request
+        response = requests.post(url, headers=headers, json=payload, timeout=60)
+        
+        # Check response status
+        if response.status_code == 200:
+            st.success("✅ MiniMax API request successful!")
+            
+            # Check if response is JSON (async task) or direct audio
+            content_type = response.headers.get('content-type', '')
+            
+            if 'application/json' in content_type:
+                # Handle async task response
+                task_data = response.json()
+                
+                if 'task_id' in task_data:
+                    # Poll for task completion
+                    return poll_task_completion(task_data['task_id'], api_key)
+                elif 'audio' in task_data:
+                    # Direct audio data in JSON
+                    audio_data = base64.b64decode(task_data['audio'])
+                    return audio_data
+                else:
+                    st.error(f"Unexpected JSON response: {task_data}")
+                    return None
+                    
+            elif 'audio' in content_type:
+                # Direct audio response
+                st.success(f"🎉 Received audio data ({len(response.content)} bytes)")
+                return response.content
+                
+            else:
+                st.error(f"Unexpected content type: {content_type}")
+                return None
+                
+        elif response.status_code == 401:
+            st.error("❌ Authentication failed - please check your MINIMAX_API_KEY")
+            return None
+            
+        elif response.status_code == 400:
+            try:
+                error_data = response.json()
+                error_msg = error_data.get('message', 'Bad request')
+                st.error(f"❌ Bad Request (400): {error_msg}")
+                
+                # Provide specific guidance
+                if 'voice_id' in error_msg.lower():
+                    st.error("💡 Try a different voice from the dropdown")
+                elif 'model' in error_msg.lower():
+                    st.error("💡 The model 'speech-2.5-hd-preview' might not be available")
+                elif 'text' in error_msg.lower():
+                    st.error("💡 Text might be too long or contain invalid characters")
+                    
+            except:
+                st.error(f"❌ Bad Request (400): {response.text}")
+            return None
+            
+        elif response.status_code == 403:
+            st.error("❌ Access forbidden - your API key may not have TTS permissions")
+            return None
+            
+        elif response.status_code == 429:
+            st.error("❌ Rate limit exceeded - please wait and try again")
+            return None
+            
+        else:
+            st.error(f"❌ API request failed: HTTP {response.status_code}")
+            st.error(f"Response: {response.text}")
+            return None
+            
+    except requests.exceptions.Timeout:
+        st.error("❌ Request timeout - please try again")
         return None
+        
+    except requests.exceptions.ConnectionError:
+        st.error("❌ Connection error - please check your internet connection")
+        return None
+        
+    except Exception as e:
+        st.error(f"❌ Unexpected error: {str(e)}")
+        return None
+
+def poll_task_completion(task_id: str, api_key: str, max_attempts: int = 30):
+    """Poll for async task completion"""
+    
+    poll_url = f"https://api.minimax.chat/v1/task_status/{task_id}"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+    
+    st.info(f"📋 Task ID: {task_id}")
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
+    for attempt in range(max_attempts):
+        try:
+            status_text.text(f"⏳ Checking task status... (attempt {attempt + 1}/{max_attempts})")
+            
+            response = requests.get(poll_url, headers=headers, timeout=10)
+            
+            if response.status_code == 200:
+                task_data = response.json()
+                status = task_data.get('status', 'unknown')
+                
+                if status == 'completed':
+                    progress_bar.progress(1.0)
+                    status_text.success("✅ Task completed!")
+                    
+                    # Get the audio data
+                    if 'result' in task_data and 'audio' in task_data['result']:
+                        audio_data = base64.b64decode(task_data['result']['audio'])
+                        return audio_data
+                    elif 'audio_url' in task_data:
+                        # Download from URL
+                        audio_response = requests.get(task_data['audio_url'])
+                        if audio_response.status_code == 200:
+                            return audio_response.content
+                    
+                    st.error("❌ Task completed but no audio data found")
+                    return None
+                    
+                elif status == 'failed':
+                    progress_bar.progress(1.0)
+                    error_msg = task_data.get('error', 'Task failed')
+                    status_text.error(f"❌ Task failed: {error_msg}")
+                    return None
+                    
+                elif status in ['pending', 'processing', 'running']:
+                    progress = min(0.9, (attempt + 1) / max_attempts)
+                    progress_bar.progress(progress)
+                    time.sleep(2)  # Wait 2 seconds before next poll
+                    continue
+                    
+                else:
+                    st.warning(f"⚠️ Unknown status: {status}")
+                    time.sleep(2)
+                    continue
+                    
+            else:
+                st.warning(f"⚠️ Status check failed: HTTP {response.status_code}")
+                time.sleep(2)
+                continue
+                
+        except Exception as e:
+            st.warning(f"⚠️ Error checking status: {str(e)}")
+            time.sleep(2)
+            continue
+    
+    # Timeout
+    progress_bar.progress(1.0)
+    status_text.error("❌ Task timeout - please try again with shorter text")
+    return None
 
 def generate_video(audio_file, images_zip, prompt: str, max_attempts: int, client):
     """Generate video using FFmpeg model"""
@@ -544,7 +612,10 @@ with tab1:
                         vol=vol,
                         pitch=pitch,
                         english_normalization=english_normalization,
-                        api_key=minimax_api_key
+                        api_key=minimax_api_key,
+                        sample_rate=sample_rate,
+                        bitrate=bitrate,
+                        file_format=file_format
                     )
                     
                     if audio_data:
