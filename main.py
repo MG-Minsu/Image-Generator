@@ -262,9 +262,34 @@ def generate_audio_minimax(text: str, voice_id: str, speed: float, vol: float,
             content_type = response.headers.get('content-type', '')
             
             if 'application/json' in content_type:
-                # Handle async task response
+                # Handle JSON response
                 task_data = response.json()
                 
+                # Check for MiniMax error format
+                if 'base_resp' in task_data:
+                    base_resp = task_data['base_resp']
+                    status_code = base_resp.get('status_code', 0)
+                    status_msg = base_resp.get('status_msg', 'Unknown error')
+                    
+                    if status_code == 2049:
+                        st.error("❌ Invalid API Key")
+                        st.error("🔧 **How to fix this:**")
+                        st.error("1. Check your MiniMax API key in Streamlit secrets")
+                        st.error("2. Make sure the key starts with 'sk-' or the correct format")
+                        st.error("3. Verify the key has TTS (Text-to-Speech) permissions")
+                        st.error("4. Try regenerating your API key from MiniMax dashboard")
+                        return None
+                    elif status_code == 2050:
+                        st.error("❌ Insufficient quota or credits")
+                        return None
+                    elif status_code == 2051:
+                        st.error("❌ Model not available or access denied")
+                        return None
+                    elif status_code != 0:
+                        st.error(f"❌ MiniMax Error {status_code}: {status_msg}")
+                        return None
+                
+                # Check for successful task creation
                 if 'task_id' in task_data:
                     # Poll for task completion
                     return poll_task_completion(task_data['task_id'], api_key)
@@ -272,8 +297,13 @@ def generate_audio_minimax(text: str, voice_id: str, speed: float, vol: float,
                     # Direct audio data in JSON
                     audio_data = base64.b64decode(task_data['audio'])
                     return audio_data
+                elif 'data' in task_data and 'audio' in task_data['data']:
+                    # Audio data nested in 'data' field
+                    audio_data = base64.b64decode(task_data['data']['audio'])
+                    return audio_data
                 else:
-                    st.error(f"Unexpected JSON response: {task_data}")
+                    st.error(f"❌ Unexpected JSON response format")
+                    st.json(task_data)  # Show the actual response for debugging
                     return None
                     
             elif 'audio' in content_type:
@@ -282,42 +312,61 @@ def generate_audio_minimax(text: str, voice_id: str, speed: float, vol: float,
                 return response.content
                 
             else:
-                st.error(f"Unexpected content type: {content_type}")
+                st.error(f"❌ Unexpected content type: {content_type}")
+                st.error(f"Response preview: {response.text[:200]}...")
                 return None
                 
         elif response.status_code == 401:
-            st.error("❌ Authentication failed - please check your MINIMAX_API_KEY")
+            st.error("❌ Authentication failed (HTTP 401)")
+            st.error("🔧 **How to fix this:**")
+            st.error("1. Verify your MINIMAX_API_KEY in Streamlit secrets")
+            st.error("2. Make sure the key format is correct")
+            st.error("3. Check that the key hasn't expired")
             return None
             
         elif response.status_code == 400:
             try:
                 error_data = response.json()
-                error_msg = error_data.get('message', 'Bad request')
-                st.error(f"❌ Bad Request (400): {error_msg}")
+                if 'base_resp' in error_data:
+                    status_msg = error_data['base_resp'].get('status_msg', 'Bad request')
+                    st.error(f"❌ Bad Request: {status_msg}")
+                else:
+                    error_msg = error_data.get('message', 'Bad request')
+                    st.error(f"❌ Bad Request: {error_msg}")
                 
                 # Provide specific guidance
-                if 'voice_id' in error_msg.lower():
-                    st.error("💡 Try a different voice from the dropdown")
-                elif 'model' in error_msg.lower():
-                    st.error("💡 The model 'speech-2.5-hd-preview' might not be available")
-                elif 'text' in error_msg.lower():
-                    st.error("💡 Text might be too long or contain invalid characters")
+                st.error("🔧 **Common fixes:**")
+                st.error("• Try a different voice from the dropdown")
+                st.error("• Check if text contains unsupported characters")
+                st.error("• Reduce text length if it's too long")
+                st.error("• Verify model name is correct")
                     
             except:
                 st.error(f"❌ Bad Request (400): {response.text}")
             return None
             
         elif response.status_code == 403:
-            st.error("❌ Access forbidden - your API key may not have TTS permissions")
+            st.error("❌ Access forbidden (HTTP 403)")
+            st.error("🔧 Your API key may not have TTS permissions")
             return None
             
         elif response.status_code == 429:
-            st.error("❌ Rate limit exceeded - please wait and try again")
+            st.error("❌ Rate limit exceeded (HTTP 429)")
+            st.error("🔧 Please wait a moment and try again")
             return None
             
         else:
             st.error(f"❌ API request failed: HTTP {response.status_code}")
-            st.error(f"Response: {response.text}")
+            
+            # Try to parse error response
+            try:
+                error_data = response.json()
+                if 'base_resp' in error_data:
+                    status_msg = error_data['base_resp'].get('status_msg', 'Unknown error')
+                    st.error(f"Error details: {status_msg}")
+                st.json(error_data)
+            except:
+                st.error(f"Response: {response.text}")
             return None
             
     except requests.exceptions.Timeout:
