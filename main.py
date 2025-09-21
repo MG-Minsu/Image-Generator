@@ -219,7 +219,7 @@ def generate_audio_minimax(text: str, voice_id: str, speed: float, vol: float,
     """Generate audio using MiniMax REST API"""
     
     # MiniMax API endpoint
-    url = "https://api.minimax.chat/v1/text_to_speech"
+    url = "https://api.minimax.io/v1/files/upload"
     
     # Request headers
     headers = {
