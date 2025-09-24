@@ -671,7 +671,7 @@ with tab1:
                 st.success(f"✅ Extracted text from {len(subtitles)} subtitles")
                 
                 # Option to use extracted text
-                if st.button("📋 Use Extracted Text", width='stretch', key="use_extracted_text"):
+                if st.button("📋 Use Extracted Text", use_container_width=True, key="use_extracted_text"):
                     audio_text = all_text
                     st.text_area("📝 Extracted Text", value=all_text, height=150, key="extracted_text_display")
                 
@@ -700,7 +700,7 @@ with tab1:
         
         st.subheader("🎤 Generate Audio")
         
-        if st.button("🚀 Generate Audio", type="primary", width='stretch', key="generate_audio_btn"):
+        if st.button("🚀 Generate Audio", type="primary", use_container_width=True, key="generate_audio_btn"):
             with st.spinner("🎤 Generating audio with MiniMax... This may take a few moments..."):
                 try:
                     # Determine which model to use
@@ -733,7 +733,7 @@ with tab1:
                             data=audio_data,
                             file_name=f"minimax_generated_audio.{file_extension}",
                             mime=f"audio/{file_format}",
-                            width='stretch',
+                            use_container_width=True,
                             key="download_audio"
                         )
                         
@@ -929,11 +929,11 @@ with tab2:
             col_gen1, col_gen2 = st.columns(2)
             
             with col_gen1:
-                generate_all = st.button("🚀 Generate All Images", type="primary", width='stretch', key="gen_all_img")
+                generate_all = st.button("🚀 Generate All Images", type="primary", use_container_width=True, key="gen_all_img")
             
             with col_gen2:
                 if len(scene_descriptions) > 5:
-                    generate_sample = st.button("🎯 Generate 5 Sample Images", width='stretch', key="gen_sample_img")
+                    generate_sample = st.button("🎯 Generate 5 Sample Images", use_container_width=True, key="gen_sample_img")
                 else:
                     generate_sample = False
             
@@ -991,7 +991,7 @@ with tab2:
                             data=zip_buffer.getvalue(),
                             file_name="srt_generated_images.zip",
                             mime="application/zip",
-                            width='stretch',
+                            use_container_width=True,
                             key="download_all_zip"
                         )
                         st.markdown("---")
@@ -1004,7 +1004,7 @@ with tab2:
                             img_col, info_col = st.columns([3, 2])
                             
                             with img_col:
-                                st.image(image, width='stretch')
+                                st.image(image, use_container_width=True)
                             
                             with info_col:
                                 st.markdown("**📝 Original Subtitle:**")
@@ -1023,7 +1023,7 @@ with tab2:
                                     file_name=f"image{i+1:04d}.png",
                                     mime="image/png",
                                     key=f"download_individual_{i}",
-                                    width='stretch'
+                                    use_container_width=True
                                 )
                             
                             st.markdown("---")
@@ -1048,7 +1048,7 @@ with tab2:
                 data=zip_buffer.getvalue(),
                 file_name="srt_generated_images.zip",
                 mime="application/zip",
-                width='stretch',
+                use_container_width=True,
                 key="download_previous_all_zip"
             )
             st.markdown("---")
@@ -1058,7 +1058,7 @@ with tab2:
             with st.expander(f"🎬 Scene {i+1}: image{i+1:04d}.png"):
                 img_col, info_col = st.columns([2, 1])
                 with img_col:
-                    st.image(image, width='stretch')
+                    st.image(image, use_container_width=True)
                 with info_col:
                     st.markdown("**📝 Original:**")
                     st.write(original_text)
@@ -1075,7 +1075,7 @@ with tab2:
                         file_name=f"image{i+1:04d}.png",
                         mime="image/png",
                         key=f"download_previous_{i}",
-                        width='stretch'
+                        use_container_width=True
                     )
 
 # ===== VIDEO CREATION TAB =====
@@ -1122,7 +1122,7 @@ with tab3:
         
         # Option to use generated audio
         if 'generated_audio' in st.session_state:
-            if st.button("🎤 Use Generated Audio", width='stretch', key="use_generated_audio"):
+            if st.button("🎤 Use Generated Audio", use_container_width=True, key="use_generated_audio"):
                 # Create a temporary file-like object from the generated audio
                 audio_buffer = BytesIO(st.session_state.generated_audio)
                 audio_file = audio_buffer
@@ -1155,7 +1155,7 @@ with tab3:
         st.markdown("---")
         st.subheader("🖼️ Use Generated Images")
         
-        if st.button("📦 Create ZIP from Generated Images", width='stretch', key="create_zip_from_generated"):
+        if st.button("📦 Create ZIP from Generated Images", use_container_width=True, key="create_zip_from_generated"):
             # Create ZIP from generated images (they're already named sequentially)
             zip_buffer = BytesIO()
             with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
@@ -1215,7 +1215,7 @@ with tab3:
     # Generate video
     st.subheader("🎬 Generate Video")
     
-    if st.button("🚀 Create Video", type="primary", width='stretch', key="generate_video_btn"):
+    if st.button("🚀 Create Video", type="primary", use_container_width=True, key="generate_video_btn"):
         if not audio_file:
             st.error("❌ Please upload an audio file or use generated audio")
         elif not images_zip and 'generated_images_zip' not in st.session_state:
