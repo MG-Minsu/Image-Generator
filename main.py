@@ -895,7 +895,7 @@ with tab2:
                 scene_descriptions = []
                 for timestamp, text in processed_entries:
                     if style_prompt.strip():
-                        description = f"A cinematic scene depicting: {text}, {style_prompt.strip()}"
+                        description = f"A cinematic scene depicting: {style_prompt.strip()}, {text}"
                     else:
                         description = f"A cinematic scene depicting: {text}"
                     scene_descriptions.append((timestamp, text, description))
